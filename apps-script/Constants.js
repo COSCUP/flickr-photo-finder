@@ -1,4 +1,4 @@
-const PHOTO_FINDER_MENU_NAME = "SITCON Photo Finder";
+const PHOTO_FINDER_MENU_NAME = "COSCUP Photo Finder";
 const PHOTO_FINDER_MAX_ERRORS = 50;
 const PHOTO_FINDER_SCHEMA_META_HEADERS = [
   "schema_version",

@@ -230,10 +230,10 @@ async function main() {
   }
   const serviceWorker = await assertIncludes(
     join(options.artifactDir, "service-worker.js"),
-    "self.__SITCON_PHOTO_FINDER_PRECACHE_URLS__ = [",
+    "PHOTO_FINDER_PRECACHE_URLS__ = [",
     "PWA precache list",
   );
-  if (!serviceWorker.includes("self.__SITCON_PHOTO_FINDER_DATA_URLS__ = [") || !serviceWorker.includes("sitcon-photo-finder-cache-fallback")) {
+  if (!serviceWorker.includes("PHOTO_FINDER_DATA_URLS__ = [") || (!serviceWorker.includes("coscup-photo-finder-cache-fallback") && !serviceWorker.includes("sitcon-photo-finder-cache-fallback"))) {
     throw new Error("service-worker.js must cache finder data and report cache fallback usage");
   }
   if (["./appearance.js", "./assets/brand-logo.svg", "./assets/brand-logo-white.svg"].some((url) => !serviceWorker.includes(JSON.stringify(url)))) {

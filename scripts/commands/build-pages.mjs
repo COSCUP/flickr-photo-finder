@@ -173,9 +173,12 @@ async function writeServiceWorker(outputDir, { dataMode, dataSource, jsFiles, st
   const cacheVersion = pwaCacheVersion({ dataMode, dataSource, precacheUrls, staticManifest });
   const source = await readFile("app/service-worker.js", "utf8");
   const header = [
-    `self.__SITCON_PHOTO_FINDER_PRECACHE_URLS__ = ${JSON.stringify(precacheUrls)};`,
-    `self.__SITCON_PHOTO_FINDER_DATA_URLS__ = ${JSON.stringify(finderDataUrls)};`,
-    `self.__SITCON_PHOTO_FINDER_CACHE_VERSION__ = ${JSON.stringify(cacheVersion)};`,
+    `self.__COSCUP_PHOTO_FINDER_PRECACHE_URLS__ = ${JSON.stringify(precacheUrls)};`,
+    `self.__COSCUP_PHOTO_FINDER_DATA_URLS__ = ${JSON.stringify(finderDataUrls)};`,
+    `self.__COSCUP_PHOTO_FINDER_CACHE_VERSION__ = ${JSON.stringify(cacheVersion)};`,
+    `self.__SITCON_PHOTO_FINDER_PRECACHE_URLS__ = self.__COSCUP_PHOTO_FINDER_PRECACHE_URLS__;`,
+    `self.__SITCON_PHOTO_FINDER_DATA_URLS__ = self.__COSCUP_PHOTO_FINDER_DATA_URLS__;`,
+    `self.__SITCON_PHOTO_FINDER_CACHE_VERSION__ = self.__COSCUP_PHOTO_FINDER_CACHE_VERSION__;`,
     "",
   ].join("\n");
   await writeFile(join(outputDir, "service-worker.js"), `${header}${source}`);

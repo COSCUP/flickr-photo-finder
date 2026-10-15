@@ -2,9 +2,9 @@
 var SITCON_PHOTO_FINDER_CONFIG = {
   "generatedAt": "not recorded in committed source",
   "schemaVersion": "2026-1.0.0",
-  "taxonomyVersion": "sha256:d40977cda8ff",
-  "sponsorshipItemsVersion": "sha256:e33bfe6034e1",
-  "sponsorshipItemsSnapshotNote": "SITCON 2026 CFS has ended. Treat this file as a fixed snapshot; future CFS versions should replace or extend it explicitly instead of being automatically synced.",
+  "taxonomyVersion": "sha256:1aa78f870ce4",
+  "sponsorshipItemsVersion": "sha256:0f74e5630c7d",
+  "sponsorshipItemsSnapshotNote": "COSCUP 2026 贊助方案快照。此檔案為固定快照，未來年度方案請明確擴充或替換。",
   "photosSheetName": "photos",
   "taxonomySheetName": "taxonomy",
   "schemaMetaSheetName": "schema_meta",
@@ -330,46 +330,21 @@ var SITCON_PHOTO_FINDER_CONFIG = {
       "簡報"
     ],
     "sponsorship_items": [
-      "Badge 繩廠商 Logo 曝光",
-      "年會 T-shirt Logo 曝光",
-      "獨家帆布袋",
-      "獨家導遊團行程",
-      "會議室椅套曝光",
-      "午餐旗、點心旗",
-      "獨家議程",
-      "遠距會議室議程",
-      "SITCON 貼紙置入",
-      "年會開閉幕口播",
-      "一次性紙餐墊",
-      "拍貼機贊助商方案",
-      "SITCON 會場指標置入",
-      "會場攤位加大",
-      "樓梯打卡牆",
-      "洗手間標語曝光",
-      "接駁車車內廣播",
-      "入口落地窗背板 Logo 曝光",
-      "會場電視輪播",
       "會場攤位",
-      "SITCON 網站議程表置入",
-      "SITCON 與會者 Email 推播置入",
-      "工作人員徽章曝光",
-      "明信片",
-      "面紙包",
-      "年會意象背板",
-      "網路宣傳",
-      "「遠道而來票」獨家冠名",
-      "OPass App 推播公告",
-      "樓梯欄杆垂掛布條展出",
-      "R0 影片輪播",
-      "R0 影片輪播加時",
-      "議程廳講者背板",
-      "R0 議程前夥伴宣讀",
-      "錄影模板  Logo 曝光",
-      "迎賓袋文宣",
-      "網頁 Logo 曝光",
-      "年會共筆 Logo 曝光",
-      "門口議程表 Logo 曝光",
-      "贈票"
+      "Keynote 演講廳垂吊布條",
+      "頸帶獨家贊助",
+      "會前派對贊助",
+      "大會點心區桌旗",
+      "會場迎賓牆曝光",
+      "徵才版面牆獨家曝光",
+      "會議桌前看板曝光",
+      "Main Track 演講時段",
+      "技術演講時段",
+      "Workshop 工作坊",
+      "網站議程頁面廣告",
+      "官方社群網站宣傳",
+      "官方 Blog 專文介紹",
+      "社群客製化贊助桌旗"
     ],
     "sponsorship_tags": [
       "攤位曝光",
@@ -459,12 +434,12 @@ var SITCON_PHOTO_FINDER_CONFIG = {
       }
     },
     "sponsorship_item_categories": [
-      "打包專屬",
-      "數位媒體曝光",
-      "更多曝光方式",
-      "獨家議程",
       "現場實體曝光",
-      "紀念品配件曝光"
+      "紀念品配件曝光",
+      "展位活動曝光",
+      "獨家議程",
+      "數位媒體曝光",
+      "活動派對曝光"
     ]
   },
   "publicSensitiveContentRules": {
@@ -856,243 +831,93 @@ var SITCON_PHOTO_FINDER_CONFIG = {
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "Badge 繩廠商 Logo 曝光",
-        "label_zh": "Badge 繩廠商 Logo 曝光",
+        "value": "會場攤位",
+        "label_zh": "會場攤位",
         "order": "1"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "年會 T-shirt Logo 曝光",
-        "label_zh": "年會 T-shirt Logo 曝光",
+        "value": "Keynote 演講廳垂吊布條",
+        "label_zh": "Keynote 演講廳垂吊布條",
         "order": "2"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "獨家帆布袋",
-        "label_zh": "獨家帆布袋",
+        "value": "頸帶獨家贊助",
+        "label_zh": "頸帶獨家贊助",
         "order": "3"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "獨家導遊團行程",
-        "label_zh": "獨家導遊團行程",
+        "value": "會前派對贊助",
+        "label_zh": "會前派對贊助",
         "order": "4"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "會議室椅套曝光",
-        "label_zh": "會議室椅套曝光",
+        "value": "大會點心區桌旗",
+        "label_zh": "大會點心區桌旗",
         "order": "5"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "午餐旗、點心旗",
-        "label_zh": "午餐旗、點心旗",
+        "value": "會場迎賓牆曝光",
+        "label_zh": "會場迎賓牆曝光",
         "order": "6"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "獨家議程",
-        "label_zh": "獨家議程",
+        "value": "徵才版面牆獨家曝光",
+        "label_zh": "徵才版面牆獨家曝光",
         "order": "7"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "遠距會議室議程",
-        "label_zh": "遠距會議室議程",
+        "value": "會議桌前看板曝光",
+        "label_zh": "會議桌前看板曝光",
         "order": "8"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "SITCON 貼紙置入",
-        "label_zh": "SITCON 貼紙置入",
+        "value": "Main Track 演講時段",
+        "label_zh": "Main Track 演講時段",
         "order": "9"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "年會開閉幕口播",
-        "label_zh": "年會開閉幕口播",
+        "value": "技術演講時段",
+        "label_zh": "技術演講時段",
         "order": "10"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "一次性紙餐墊",
-        "label_zh": "一次性紙餐墊",
+        "value": "Workshop 工作坊",
+        "label_zh": "Workshop 工作坊",
         "order": "11"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "拍貼機贊助商方案",
-        "label_zh": "拍貼機贊助商方案",
+        "value": "網站議程頁面廣告",
+        "label_zh": "網站議程頁面廣告",
         "order": "12"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "SITCON 會場指標置入",
-        "label_zh": "SITCON 會場指標置入",
+        "value": "官方社群網站宣傳",
+        "label_zh": "官方社群網站宣傳",
         "order": "13"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "會場攤位加大",
-        "label_zh": "會場攤位加大",
+        "value": "官方 Blog 專文介紹",
+        "label_zh": "官方 Blog 專文介紹",
         "order": "14"
       },
       {
         "taxonomy_key": "sponsorship_items",
-        "value": "樓梯打卡牆",
-        "label_zh": "樓梯打卡牆",
+        "value": "社群客製化贊助桌旗",
+        "label_zh": "社群客製化贊助桌旗",
         "order": "15"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "洗手間標語曝光",
-        "label_zh": "洗手間標語曝光",
-        "order": "16"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "接駁車車內廣播",
-        "label_zh": "接駁車車內廣播",
-        "order": "17"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "入口落地窗背板 Logo 曝光",
-        "label_zh": "入口落地窗背板 Logo 曝光",
-        "order": "18"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "會場電視輪播",
-        "label_zh": "會場電視輪播",
-        "order": "19"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "會場攤位",
-        "label_zh": "會場攤位",
-        "order": "20"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "SITCON 網站議程表置入",
-        "label_zh": "SITCON 網站議程表置入",
-        "order": "21"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "SITCON 與會者 Email 推播置入",
-        "label_zh": "SITCON 與會者 Email 推播置入",
-        "order": "22"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "工作人員徽章曝光",
-        "label_zh": "工作人員徽章曝光",
-        "order": "23"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "明信片",
-        "label_zh": "明信片",
-        "order": "24"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "面紙包",
-        "label_zh": "面紙包",
-        "order": "25"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "年會意象背板",
-        "label_zh": "年會意象背板",
-        "order": "26"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "網路宣傳",
-        "label_zh": "網路宣傳",
-        "order": "27"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "「遠道而來票」獨家冠名",
-        "label_zh": "「遠道而來票」獨家冠名",
-        "order": "28"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "OPass App 推播公告",
-        "label_zh": "OPass App 推播公告",
-        "order": "29"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "樓梯欄杆垂掛布條展出",
-        "label_zh": "樓梯欄杆垂掛布條展出",
-        "order": "30"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "R0 影片輪播",
-        "label_zh": "R0 影片輪播",
-        "order": "31"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "R0 影片輪播加時",
-        "label_zh": "R0 影片輪播加時",
-        "order": "32"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "議程廳講者背板",
-        "label_zh": "議程廳講者背板",
-        "order": "33"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "R0 議程前夥伴宣讀",
-        "label_zh": "R0 議程前夥伴宣讀",
-        "order": "34"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "錄影模板  Logo 曝光",
-        "label_zh": "錄影模板  Logo 曝光",
-        "order": "35"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "迎賓袋文宣",
-        "label_zh": "迎賓袋文宣",
-        "order": "36"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "網頁 Logo 曝光",
-        "label_zh": "網頁 Logo 曝光",
-        "order": "37"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "年會共筆 Logo 曝光",
-        "label_zh": "年會共筆 Logo 曝光",
-        "order": "38"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "門口議程表 Logo 曝光",
-        "label_zh": "門口議程表 Logo 曝光",
-        "order": "39"
-      },
-      {
-        "taxonomy_key": "sponsorship_items",
-        "value": "贈票",
-        "label_zh": "贈票",
-        "order": "40"
       },
       {
         "taxonomy_key": "sponsorship_tags",
@@ -1258,20 +1083,20 @@ var SITCON_PHOTO_FINDER_CONFIG = {
       },
       {
         "taxonomy_key": "sponsorship_item_categories",
-        "value": "打包專屬",
-        "label_zh": "打包專屬",
+        "value": "現場實體曝光",
+        "label_zh": "現場實體曝光",
         "order": "1"
       },
       {
         "taxonomy_key": "sponsorship_item_categories",
-        "value": "數位媒體曝光",
-        "label_zh": "數位媒體曝光",
+        "value": "紀念品配件曝光",
+        "label_zh": "紀念品配件曝光",
         "order": "2"
       },
       {
         "taxonomy_key": "sponsorship_item_categories",
-        "value": "更多曝光方式",
-        "label_zh": "更多曝光方式",
+        "value": "展位活動曝光",
+        "label_zh": "展位活動曝光",
         "order": "3"
       },
       {
@@ -1282,14 +1107,14 @@ var SITCON_PHOTO_FINDER_CONFIG = {
       },
       {
         "taxonomy_key": "sponsorship_item_categories",
-        "value": "現場實體曝光",
-        "label_zh": "現場實體曝光",
+        "value": "數位媒體曝光",
+        "label_zh": "數位媒體曝光",
         "order": "5"
       },
       {
         "taxonomy_key": "sponsorship_item_categories",
-        "value": "紀念品配件曝光",
-        "label_zh": "紀念品配件曝光",
+        "value": "活動派對曝光",
+        "label_zh": "活動派對曝光",
         "order": "6"
       }
     ]

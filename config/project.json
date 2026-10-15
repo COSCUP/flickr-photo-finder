@@ -1,29 +1,29 @@
 {
   "organization": {
-    "name": "SITCON",
-    "displayName": "SITCON"
+    "name": "COSCUP",
+    "displayName": "COSCUP"
   },
   "flickr": {
-    "ownerPath": "sitcon",
-    "albumsUrl": "https://www.flickr.com/photos/sitcon/albums/",
-    "profileUrl": "https://www.flickr.com/photos/sitcon/"
+    "ownerPath": "coscup",
+    "albumsUrl": "https://www.flickr.com/photos/coscup/albums/",
+    "profileUrl": "https://www.flickr.com/photos/coscup/"
   },
   "repository": {
-    "url": "https://github.com/sitcon-tw/flickr-photo-finder"
+    "url": "https://github.com/COSCUP/flickr-photo-finder"
   },
   "frontend": {
-    "appTitle": "SITCON Flickr Photo Finder",
+    "appTitle": "COSCUP Flickr Photo Finder",
     "sourceLinkLabel": "Flickr",
     "repositoryLinkLabel": "GitHub 專案",
     "repositoryLinkTitle": "了解專案細節或回報問題",
     "metadata": {
-      "description": "SITCON 公開照片索引，依工作需求、內容與整理狀態快速找圖。",
-      "siteUrl": "https://sitcon.org/flickr-photo-finder/",
+      "description": "COSCUP 公開照片索引，依工作需求、內容與整理狀態快速找圖。",
+      "siteUrl": "https://coscup.org/flickr-photo-finder/",
       "imagePath": "./assets/og-image.png",
-      "imageAlt": "SITCON 活動照片拼貼與 Photo Finder 標題"
+      "imageAlt": "COSCUP 活動照片拼貼與 Photo Finder 標題"
     },
-    "ga4MeasurementId": "G-ZQ49HXBJ2P",
-    "ga4PropertyId": "536884920"
+    "ga4MeasurementId": "G-C9EMTMDSS1",
+    "ga4PropertyId": ""
   },
   "googleSheets": {
     "spreadsheetId": "1JM2QzJo5kpeILZPyTSE6gUK3z-FyRcaGhPJlYE-FMbs",

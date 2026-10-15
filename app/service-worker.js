@@ -1,9 +1,9 @@
-const PRECACHE_URLS = self.__SITCON_PHOTO_FINDER_PRECACHE_URLS__ || ["./"];
-const FINDER_DATA_URLS = self.__SITCON_PHOTO_FINDER_DATA_URLS__ || [];
-const CACHE_VERSION = self.__SITCON_PHOTO_FINDER_CACHE_VERSION__ || "dev";
-const APP_CACHE = `sitcon-photo-finder-app-${CACHE_VERSION}`;
-const DATA_CACHE = `sitcon-photo-finder-data-${CACHE_VERSION}`;
-const DETAIL_CACHE = `sitcon-photo-finder-detail-${CACHE_VERSION}`;
+const PRECACHE_URLS = self.__COSCUP_PHOTO_FINDER_PRECACHE_URLS__ || self.__SITCON_PHOTO_FINDER_PRECACHE_URLS__ || ["./"];
+const FINDER_DATA_URLS = self.__COSCUP_PHOTO_FINDER_DATA_URLS__ || self.__SITCON_PHOTO_FINDER_DATA_URLS__ || [];
+const CACHE_VERSION = self.__COSCUP_PHOTO_FINDER_CACHE_VERSION__ || self.__SITCON_PHOTO_FINDER_CACHE_VERSION__ || "dev";
+const APP_CACHE = `coscup-photo-finder-app-${CACHE_VERSION}`;
+const DATA_CACHE = `coscup-photo-finder-data-${CACHE_VERSION}`;
+const DETAIL_CACHE = `coscup-photo-finder-detail-${CACHE_VERSION}`;
 const CACHE_NAMES = new Set([APP_CACHE, DATA_CACHE, DETAIL_CACHE]);
 
 function sameOriginUrl(request) {
@@ -44,7 +44,7 @@ async function notifyCacheFallback(event, request) {
   }
   const client = await self.clients.get(event.clientId);
   client?.postMessage({
-    type: "sitcon-photo-finder-cache-fallback",
+    type: "coscup-photo-finder-cache-fallback",
     url: request.url,
   });
 }
@@ -99,7 +99,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys()
-      .then((names) => Promise.all(names.filter((name) => name.startsWith("sitcon-photo-finder-") && !CACHE_NAMES.has(name)).map((name) => caches.delete(name))))
+      .then((names) => Promise.all(names.filter((name) => (name.startsWith("coscup-photo-finder-") || name.startsWith("sitcon-photo-finder-")) && !CACHE_NAMES.has(name)).map((name) => caches.delete(name))))
       .then(() => self.clients.claim()),
   );
 });

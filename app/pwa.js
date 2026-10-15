@@ -53,7 +53,7 @@ export function registerPwa({ generatedAt = "", onStatusChange = () => {} } = {}
   });
 
   navigator.serviceWorker.addEventListener("message", (event) => {
-    if (event.data?.type !== "sitcon-photo-finder-cache-fallback") {
+    if (event.data?.type !== "coscup-photo-finder-cache-fallback" && event.data?.type !== "sitcon-photo-finder-cache-fallback") {
       return;
     }
     state.usedCache = true;

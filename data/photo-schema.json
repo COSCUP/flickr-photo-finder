@@ -3,7 +3,7 @@
   "tables": {
     "photos": {
       "export_path": "fixtures/photos.csv",
-      "description_zh": "SITCON Flickr 照片索引。正式資料以 Google Sheets 為準，此 schema 也定義 CSV 匯出格式。",
+      "description_zh": "COSCUP Flickr 照片索引。正式資料以 Google Sheets 為準，此 schema 也定義 CSV 匯出格式。",
       "reviewed_required_fields": [
         "subject_type",
         "scene_tags"

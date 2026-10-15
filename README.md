@@ -1,12 +1,12 @@
-# SITCON Flickr Photo Finder
+# COSCUP Flickr Photo Finder
 
-SITCON Flickr Photo Finder 把 SITCON Flickr 上的公開活動照片，整理成一份可搜尋、可協作、可由 AI 協助產生標記候選但仍由人審核的照片索引。
+COSCUP Flickr Photo Finder 把 COSCUP Flickr 上的公開活動照片，整理成一份可搜尋、可協作、可由 AI 協助產生標記候選但仍由人審核的照片索引。
 
 它不是要取代 Flickr，也不是把原圖保存到這裡。照片仍在 Flickr；這個專案建立的是一層「找得到、看得懂、能持續維護」的索引，讓籌備團隊可以依照社群貼文、活動回顧、贊助成果、新聞稿等真實需求找照片。
 
-[立即體驗公開搜尋前端](https://sitcon.org/flickr-photo-finder/) · [檢視正式照片索引](https://docs.google.com/spreadsheets/d/1JM2QzJo5kpeILZPyTSE6gUK3z-FyRcaGhPJlYE-FMbs/edit) · [瀏覽 SITCON Flickr 相簿](https://www.flickr.com/photos/sitcon/albums/)
+[立即體驗公開搜尋前端](https://coscup.org/flickr-photo-finder/) · [檢視正式照片索引](https://docs.google.com/spreadsheets/d/1JM2QzJo5kpeILZPyTSE6gUK3z-FyRcaGhPJlYE-FMbs/edit) · [瀏覽 COSCUP Flickr 相簿](https://www.flickr.com/photos/coscup/albums/)
 
-![SITCON Flickr Photo Finder 搜尋前端範例畫面](docs/assets/readme/photo-finder-search.png)
+![COSCUP Flickr Photo Finder 搜尋前端範例畫面](docs/assets/readme/photo-finder-search.png)
 
 ## 這能幫你做什麼
 
@@ -23,7 +23,7 @@ SITCON Flickr Photo Finder 把 SITCON Flickr 上的公開活動照片，整理�
 
 ## 這套方法怎麼運作
 
-![SITCON Flickr Photo Finder 角色定位圖：Flickr 是照片來源，正式照片索引放在 Google Sheets，這個專案提供資料規則、匯入工具、AI 輔助與使用介面](docs/assets/readme/photo-finder-flow.svg)
+![COSCUP Flickr Photo Finder 角色定位圖：Flickr 是照片來源，正式照片索引放在 Google Sheets，這個專案提供資料規則、匯入工具、AI 輔助與使用介面](docs/assets/readme/photo-finder-flow.svg)
 
 核心設計很簡單：
 
@@ -43,9 +43,9 @@ SITCON Flickr Photo Finder 把 SITCON Flickr 上的公開活動照片，整理�
 
 ## 在 Google Sheets 裡整理照片
 
-![正式照片索引中的 SITCON Photo Finder 選單、右側整理面板與使用說明入口](docs/assets/readme/google-sheets-review-workflow.png)
+![正式照片索引中的 COSCUP Photo Finder 選單、右側整理面板與使用說明入口](docs/assets/readme/google-sheets-review-workflow.png)
 
-整理者可以在 `photos` 選一列照片，從上方 `SITCON Photo Finder` 選單開啟「開始整理照片」。右側整理面板會顯示照片預覽、Flickr 連結與主要欄位，讓編輯者用中文提示完成檢查；英文欄位名稱仍保留給工具、CSV、Apps Script 與公開前端共用。
+整理者可以在 `photos` 選一列照片，從上方 `COSCUP Photo Finder` 選單開啟「開始整理照片」。右側整理面板會顯示照片預覽、Flickr 連結與主要欄位，讓編輯者用中文提示完成檢查；英文欄位名稱仍保留給工具、CSV、Apps Script 與公開前端共用。
 
 如果只是想先熟悉操作，請從正式照片索引的 `使用說明` 分頁進入「練習用試算表」，不要在正式照片索引試填。練習表會使用真實照片小樣本與同一套整理面板，內容可由維護者重置；維護流程見 [`docs/sheets-sync-workflow.md`](docs/sheets-sync-workflow.md)。
 
@@ -63,7 +63,7 @@ SITCON Flickr Photo Finder 把 SITCON Flickr 上的公開活動照片，整理�
 
 | 你想做的事 | 建議入口 |
 | --- | --- |
-| 只想找照片 | [公開搜尋前端](https://sitcon.org/flickr-photo-finder/) |
+| 只想找照片 | [公開搜尋前端](https://coscup.org/flickr-photo-finder/) |
 | 用自己熟悉的 AI 助手找照片 | [`docs/ai-readable-dataset.md`](docs/ai-readable-dataset.md) |
 | 協助整理照片資料 | [`docs/data-entry-guide.md`](docs/data-entry-guide.md) |
 | 理解整體架構 | [`docs/project-architecture.md`](docs/project-architecture.md) |
@@ -88,6 +88,6 @@ pnpm data:validate
 
 這個專案的程式碼、文件、欄位設計、分類、提示詞與工具預設採用 Apache-2.0 授權，詳見 [`LICENSE`](LICENSE)。
 
-這份授權不代表 SITCON Flickr 上的原始照片被重新授權。照片本身的來源、授權與使用脈絡，仍應以 Flickr 原頁為準。
+這份授權不代表 COSCUP Flickr 上的原始照片被重新授權。照片本身的來源、授權與使用脈絡，仍應以 Flickr 原頁為準。
 
 歡迎用 issue 或 pull request 協助改善欄位設計、分類、AI 標記規則、資料流程、文件與公開搜尋前端。協作方式請看 [`CONTRIBUTING.md`](CONTRIBUTING.md)。

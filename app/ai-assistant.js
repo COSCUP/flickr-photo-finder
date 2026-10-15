@@ -26,7 +26,7 @@ export function buildAiAssistantPrompt({ sheetUrl, taskLabel, searchValue, filte
   return `請讀取這份 Google Sheets 的 photos 工作表：
 ${resolvedSheetUrl}
 
-協助我找 SITCON Flickr 照片。
+協助我找 COSCUP Flickr 照片。
 目前優先檢視：${taskLabel}
 我的需求：${needText}
 目前已知條件：${filterText || "無，請先用自然語言探索。"}

@@ -16,7 +16,7 @@ function openPhotoReviewPanel() {
   const template = HtmlService.createTemplateFromFile("ReviewPanel");
   template.bootstrapState = JSON.stringify(getReviewPanelBootstrapState()).replace(/</g, "\\u003c");
   const html = template.evaluate()
-    .setTitle("SITCON Photo Review");
+    .setTitle("COSCUP Photo Review");
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
@@ -24,7 +24,7 @@ function doGet() {
   const template = HtmlService.createTemplateFromFile("ReviewWebApp");
   template.bootstrapState = JSON.stringify(null);
   return template.evaluate()
-    .setTitle("SITCON Photo Finder Review")
+    .setTitle("COSCUP Photo Finder Review")
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 

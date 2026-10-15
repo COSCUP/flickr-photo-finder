@@ -1,6 +1,6 @@
 // Run before the stylesheet so a saved preference also applies to the first paint.
 (() => {
-  const storageKey = "sitcon-photo-finder-appearance";
+  const storageKey = "coscup-photo-finder-appearance";
   const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
   const labels = { dark: "深色", light: "淺色" };
   let preference = null;
