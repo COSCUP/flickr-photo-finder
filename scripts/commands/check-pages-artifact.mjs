@@ -23,7 +23,7 @@ Usually run pnpm finder:build before this command so tmp/pages exists.`);
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       dir: { type: "string" },
       help: { type: "boolean", short: "h" },

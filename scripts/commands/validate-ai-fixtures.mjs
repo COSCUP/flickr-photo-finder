@@ -22,7 +22,7 @@ warnings, and invalid- must fail.`);
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       "fixtures-dir": { type: "string" },
       help: { type: "boolean", short: "h" },

@@ -15,7 +15,7 @@ This command only reads public Google Sheets CSV exports. It does not write data
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       "spreadsheet-id": { type: "string" },
       help: { type: "boolean", short: "h" },

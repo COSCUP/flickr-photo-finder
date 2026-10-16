@@ -31,7 +31,7 @@ photos, validate proposals, write shards, or update Google Sheets.`);
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       "run-dir": { type: "string" },
       session: { type: "string" },

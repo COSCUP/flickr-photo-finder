@@ -24,7 +24,7 @@ the discovered album catalog: album_id, album_url, album_title, and photo_count.
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       discovered: { type: "string" },
       "sheets-export": { type: "string" },

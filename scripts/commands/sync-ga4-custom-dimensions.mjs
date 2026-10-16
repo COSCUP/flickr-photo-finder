@@ -23,7 +23,7 @@ See docs/ga4-operations.md for service account access setup.`);
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       property: { type: "string" },
       write: { type: "boolean" },

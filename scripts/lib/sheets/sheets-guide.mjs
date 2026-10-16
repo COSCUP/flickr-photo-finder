@@ -31,7 +31,7 @@ export function guideRows({
   const practiceUrl = spreadsheetUrl(practiceSpreadsheetId);
   const isPractice = target === "practice";
   return [
-    guideRow("title", [isPractice ? "SITCON Flickr Photo Finder 練習用試算表" : "SITCON Flickr Photo Finder 使用說明", "", "", ""]),
+    guideRow("title", [isPractice ? "COSCUP Flickr Photo Finder 練習用試算表" : "COSCUP Flickr Photo Finder 使用說明", "", "", ""]),
     guideRow("body", [
       isPractice
         ? "這張試算表給整理者練習操作。可以試著選照片、開啟右側整理面板、修改欄位與儲存；內容會由維護者定期重置，不是正式照片索引。"
@@ -44,10 +44,10 @@ export function guideRows({
     guideRow("section", ["先判斷你要做什麼", "", "", ""]),
     guideRow("tableHeader", ["你想做的事", "從哪裡開始", "操作方式", "提醒"]),
     guideRow("tableRow", ["找照片", "公開搜尋前端", frontendUrl, "只能讀取，不會改到照片索引。"]),
-    guideRow("tableRow", ["整理正式資料", isPractice ? "正式照片索引" : "photos 分頁", isPractice ? spreadsheetUrl(formalSpreadsheetId) : "選一列照片，再從上方「SITCON Photo Finder」選「開始整理照片」。", isPractice ? "練習熟悉後，再回正式表整理真正資料。" : "右側整理面板會顯示照片預覽與可編輯欄位。"]),
-    guideRow("tableRow", ["檢查資料", "SITCON Photo Finder 選單", "使用「檢查這張照片」、「檢查全部照片」或「檢查公開資料格式」。", "結果會寫到 validation_report。"]),
+    guideRow("tableRow", ["整理正式資料", isPractice ? "正式照片索引" : "photos 分頁", isPractice ? spreadsheetUrl(formalSpreadsheetId) : "選一列照片，再從上方「COSCUP Photo Finder」選「開始整理照片」。", isPractice ? "練習熟悉後，再回正式表整理真正資料。" : "右側整理面板會顯示照片預覽與可編輯欄位。"]),
+    guideRow("tableRow", ["檢查資料", "COSCUP Photo Finder 選單", "使用「檢查這張照片」、「檢查全部照片」或「檢查公開資料格式」。", "結果會寫到 validation_report。"]),
     isPractice
-      ? guideRow("tableRow", ["練習編輯", "這張試算表", "選一列照片，再從上方「SITCON Photo Finder」選「開始整理照片」。", "可以試填；資料可能被重置。"])
+      ? guideRow("tableRow", ["練習編輯", "這張試算表", "選一列照片，再從上方「COSCUP Photo Finder」選「開始整理照片」。", "可以試填；資料可能被重置。"])
       : guideRow("tableRow", ["練習編輯", "練習用試算表", practiceUrl || "請維護者先建立練習用試算表", practiceUrl ? "請先到練習表試填，不要在正式表測試操作。" : "練習表建立後，這裡會放固定連結。"]),
     blankGuideRow(),
     guideRow("section", ["常用分頁導覽", "", "", ""]),

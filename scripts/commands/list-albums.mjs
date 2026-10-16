@@ -41,7 +41,7 @@ preserve the Flickr album catalog order from discovery.`);
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       albums: { type: "string" },
       source: { type: "string" },

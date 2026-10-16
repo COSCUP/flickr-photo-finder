@@ -39,7 +39,7 @@ at build time so production Pages does not fetch Google Sheets at runtime.`);
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       "output-dir": { type: "string" },
       "spreadsheet-id": { type: "string" },

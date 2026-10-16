@@ -32,7 +32,7 @@ Environment:
 
 function parseArgs(argv) {
   const { values } = parseNodeArgs({
-    args: argv.slice(2),
+    args: argv.slice(2).filter((arg) => arg !== "--"),
     options: {
       source: { type: "string" },
       "output-dir": { type: "string" },
