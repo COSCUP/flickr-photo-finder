@@ -14,6 +14,7 @@ function printUsage() {
 Options:
   --input-dir <path>      Directory containing sheets:init CSVs. Default: tmp/sheets-init.
   --spreadsheet-id <id>   Google Sheets spreadsheet ID. Default: config/project.json googleSheets.spreadsheetId.
+  --sheets <names>        Comma-separated sheet names to apply. Default: all fixed Sheets tabs.
   --write                 Apply changes. Without this flag the command only performs a dry-run.
   --help, -h              Show this help.
 
@@ -32,6 +33,7 @@ function parseArgs(argv) {
   const options = {
     help: false,
     inputDir: defaultInputDir,
+    sheetNames: fixedSheetNames,
     spreadsheetId: googleSheetsSpreadsheetId,
     write: false,
   };
@@ -46,6 +48,12 @@ function parseArgs(argv) {
     } else if (arg === "--spreadsheet-id") {
       options.spreadsheetId = args[index + 1] ?? "";
       index += 1;
+    } else if (arg === "--sheets") {
+      options.sheetNames = (args[index + 1] ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean);
+      index += 1;
     } else if (arg === "--write") {
       options.write = true;
     } else {
@@ -59,6 +67,14 @@ function parseArgs(argv) {
     }
     if (!options.spreadsheetId) {
       throw new Error("Set googleSheets.spreadsheetId in config/project.json or pass --spreadsheet-id");
+    }
+    if (options.sheetNames.length === 0) {
+      throw new Error("--sheets requires at least one sheet name");
+    }
+    for (const sheetName of options.sheetNames) {
+      if (!fixedSheetNames.includes(sheetName)) {
+        throw new Error(`Unknown fixed sheet name: ${sheetName}`);
+      }
     }
   }
 
@@ -110,9 +126,9 @@ function hasOverwriteRisk(status) {
   return status === "has_data" || status === "header_mismatch";
 }
 
-async function readInputSheets(inputDir) {
+async function readInputSheets(inputDir, sheetNames = fixedSheetNames) {
   const sheets = [];
-  for (const sheetName of fixedSheetNames) {
+  for (const sheetName of sheetNames) {
     const path = join(inputDir, `${sheetName}.csv`);
     const rows = parseCsv(await readFile(path, "utf8"));
     const expectedHeaders = expectedSheetHeaders[sheetName];
@@ -260,7 +276,7 @@ async function main() {
     return;
   }
 
-  const inputSheets = await readInputSheets(options.inputDir);
+  const inputSheets = await readInputSheets(options.inputDir, options.sheetNames);
   const sheets = await createSheetsService();
   const plan = await buildPlan(sheets, options.spreadsheetId, inputSheets);
   const blocked = plan.filter((item) => item.action === "blocked");
