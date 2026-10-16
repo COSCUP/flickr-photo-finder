@@ -269,6 +269,9 @@ function mergeWithExisting(discoveredAlbums, existingAlbums) {
 
   for (const album of existingAlbums) {
     if (!discoveredIds.has(album.album_id)) {
+      if (album.album_url && !album.album_url.includes(`/photos/${flickrOwnerPath}/`)) {
+        continue;
+      }
       merged.push(album);
     }
   }
