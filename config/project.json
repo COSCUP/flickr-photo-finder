@@ -22,14 +22,14 @@
       "imagePath": "./assets/og-image.png",
       "imageAlt": "COSCUP 活動照片拼貼與 Photo Finder 標題"
     },
-    "ga4MeasurementId": "G-C9EMTMDSS1",
+    "ga4MeasurementId": "G-F89ZPX1JQL",
     "ga4PropertyId": ""
   },
   "googleSheets": {
-    "spreadsheetId": "1JM2QzJo5kpeILZPyTSE6gUK3z-FyRcaGhPJlYE-FMbs",
-    "appsScriptId": "1dVoGrgHrVvQuQYHxzIJEA8tCtC9DZ8OdCbysAaFDbaKjdNLcYQgrreGH",
-    "practiceSpreadsheetId": "12T5D8RKurwDdhz_5hpk-Fi_q9rkfdHJJG9WU3XYZaAc",
-    "practiceAppsScriptId": "1gk4mQlysJDlv0cH4sFaCRmaLSuVTr0ZA8gBmhtTp48m398fnbFRYRMs6",
-    "photosSheetGid": 1663351240
+    "spreadsheetId": "1IXqi8b8ZKT5pN5Jr74Sbqq6u_rfsvTbDPywh_9Eetq0",
+    "appsScriptId": "1keQ-jQ3hHHlaYv_W3jeVsr_PCDakP4qcDyOe2z0rUxiw6URqiGmdNguR",
+    "practiceSpreadsheetId": "1vbcjnBbtP7FnffMTzAYYATuXDcMqwmkX6fa-Pg7chqY",
+    "practiceAppsScriptId": "1hLpYFq5vtDaweaBrZQrsGjnWyVMn9MubaDLxo0d9sk5cI6hYlRz2YAnB",
+    "photosSheetGid": 0
   }
 }
