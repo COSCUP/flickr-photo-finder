@@ -148,6 +148,7 @@ function buildPrecacheUrls({ dataMode, jsFiles }) {
     "./assets/og-image.png",
     "./assets/brand-logo.svg",
     "./assets/brand-logo-white.svg",
+    "./assets/favicon.svg",
     ...buildFinderDataUrls(dataMode),
     ...jsFiles.map(artifactUrl),
   ];
@@ -277,6 +278,7 @@ function renderMetadataHtml() {
     `<title>${escapeHtmlAttribute(title)}</title>`,
     `<meta name="description" content="${escapeHtmlAttribute(description)}" />`,
     siteUrl ? `<link rel="canonical" href="${escapeHtmlAttribute(siteUrl)}" />` : "",
+    `<link rel="icon" type="image/svg+xml" href="./assets/favicon.svg" />`,
     `<meta property="og:locale" content="zh_TW" />`,
     `<meta property="og:site_name" content="${escapeHtmlAttribute(title)}" />`,
     `<meta property="og:type" content="website" />`,
@@ -352,6 +354,7 @@ export async function buildPagesArtifact({
   await copyIntoArtifact("app/assets/og-image.png", outputDir, "assets/og-image.png");
   await copyIntoArtifact("app/assets/brand-logo.svg", outputDir, "assets/brand-logo.svg");
   await copyIntoArtifact("app/assets/brand-logo-white.svg", outputDir, "assets/brand-logo-white.svg");
+  await copyIntoArtifact("app/assets/favicon.svg", outputDir, "assets/favicon.svg");
   await copyIntoArtifact("config/project.json", outputDir);
   await copyIntoArtifact("data/interface-registry.json", outputDir);
   await copyIntoArtifact("data/photo-schema.json", outputDir);

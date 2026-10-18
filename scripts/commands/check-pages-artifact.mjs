@@ -203,6 +203,7 @@ async function main() {
     "assets/og-image.png",
     "assets/brand-logo.svg",
     "assets/brand-logo-white.svg",
+    "assets/favicon.svg",
     "appearance.js",
     "index.html",
     "main.js",
@@ -242,6 +243,7 @@ async function main() {
   const requiredMetadata = [
     'name="description"',
     'rel="canonical"',
+    'rel="icon" type="image/svg+xml" href="./assets/favicon.svg"',
     'property="og:title"',
     'property="og:description"',
     'property="og:url"',
