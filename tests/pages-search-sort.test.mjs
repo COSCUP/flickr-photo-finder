@@ -400,6 +400,8 @@ describe("Pages search/sort pure logic", () => {
         collection: [],
       },
       selectedPhotoIds: ["100", "200"],
+      view: "",
+      similar: "",
     });
   });
 

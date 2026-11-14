@@ -110,6 +110,13 @@
           <button id="resetButton" type="button">清除</button>
         </div>
 
+        <div id="semanticBar" class="semantic-bar" hidden>
+          <button id="semanticButton" class="semantic-button" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="semanticDialog">
+            語意搜尋（實驗）
+          </button>
+          <p id="semanticStatus" class="semantic-status" role="status" hidden></p>
+        </div>
+
         <div class="filter-toolbar">
           <div id="taskFilterGrid" class="filter-grid">
             <label>
@@ -271,6 +278,10 @@
         </aside>
 
         <section class="results-area" aria-label="照片結果">
+          <div id="resultTabs" class="result-tabs" role="tablist" aria-label="結果類型" hidden>
+            <button id="semanticTabButton" class="result-tab" type="button" role="tab" aria-selected="true" data-result-view="semantic">語意相近</button>
+            <button id="keywordTabButton" class="result-tab" type="button" role="tab" aria-selected="false" data-result-view="keyword">關鍵字命中</button>
+          </div>
           <section id="photoGrid" class="photo-grid" aria-live="polite" aria-busy="true">
             <div class="loading-state" role="status">
               <span class="loading-spinner" aria-hidden="true"></span>
@@ -326,10 +337,100 @@
             <a id="previewSheetLink" class="photo-action sheet-row-link" target="_blank" rel="noreferrer">Sheets</a>
             <button id="previewCopyFlickrButton" class="copy-flickr-link-button" type="button">Flickr</button>
             <button id="previewCopyFinderButton" class="copy-finder-link-button" type="button">本頁</button>
+            <button id="previewSimilarButton" class="find-similar-button" type="button" hidden>找相似照片</button>
           </div>
           <div id="previewStatuses" class="photo-statuses preview-statuses"></div>
           <p id="previewReference" class="photo-reference preview-reference"></p>
           <dl id="previewDetails" class="preview-details"></dl>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="semanticDialog" class="semantic-dialog" aria-labelledby="semanticDialogTitle">
+      <div class="dialog-header">
+        <div>
+          <h2 id="semanticDialogTitle">語意搜尋（實驗）</h2>
+          <p>用一句話描述想要的畫面，或從照片預覽找相似照片。</p>
+        </div>
+        <button id="semanticDismissButton" type="button">關閉</button>
+      </div>
+      <div class="semantic-dialog-body">
+        <p class="semantic-dialog-note">
+          需要先下載資料，查詢內容只在你的瀏覽器裡計算，不會送出。結果依相似度排序，不代表照片一定符合；以圖找圖比較的是整體畫面，不辨識人物。
+        </p>
+        <p id="semanticDialogMessage" class="semantic-dialog-message" role="status" hidden></p>
+        <p id="semanticWebGpuNote" class="semantic-dialog-message" hidden></p>
+
+        <div id="semanticChoice" class="semantic-choice">
+          <table class="semantic-size-table">
+            <caption>下載內容</caption>
+            <thead>
+              <tr>
+                <th scope="col">項目</th>
+                <th scope="col">大小</th>
+                <th scope="col">來源</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th id="semanticSizeVectorsLabel" scope="row">照片向量（文字與圖片）</th>
+                <td id="semanticSizeVectors">約 35 MB</td>
+                <td>本站</td>
+              </tr>
+              <tr id="semanticSizeModelRow">
+                <th scope="row">查詢模型（含 tokenizer）</th>
+                <td id="semanticSizeModel">約 206 MB</td>
+                <td>huggingface.co</td>
+              </tr>
+              <tr id="semanticSizeRuntimeRow">
+                <th scope="row">執行環境</th>
+                <td id="semanticSizeRuntime">約 28 MB</td>
+                <td>jsDelivr</td>
+              </tr>
+            </tbody>
+            <tfoot id="semanticSizeTotalRow">
+              <tr>
+                <th scope="row">合計</th>
+                <td id="semanticSizeTotal">約 270 MB</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+          <p class="semantic-data-warning">使用行動網路時請留意流量。下載後會存在這個瀏覽器，下次開啟不必重新下載；只用以圖找圖時，只需要圖片向量。</p>
+          <div class="semantic-dialog-actions">
+            <button id="semanticEnableFullButton" class="is-primary" type="button">下載並開啟語意搜尋</button>
+            <button id="semanticEnableImageButton" type="button">只下載以圖找圖（約 18 MB）</button>
+          </div>
+        </div>
+
+        <div id="semanticProgress" class="semantic-progress" hidden>
+          <div class="semantic-progress-row">
+            <label for="semanticProgressVectors">照片向量</label>
+            <progress id="semanticProgressVectors" max="1" value="0"></progress>
+            <span id="semanticProgressVectorsText"></span>
+          </div>
+          <div id="semanticProgressModelRow" class="semantic-progress-row">
+            <label for="semanticProgressModel">查詢模型</label>
+            <progress id="semanticProgressModel" max="1" value="0"></progress>
+            <span id="semanticProgressModelText"></span>
+          </div>
+          <div id="semanticProgressRuntimeRow" class="semantic-progress-row">
+            <label for="semanticProgressRuntime">執行環境</label>
+            <progress id="semanticProgressRuntime"></progress>
+            <span id="semanticProgressRuntimeText"></span>
+          </div>
+          <div class="semantic-progress-row is-total">
+            <label for="semanticProgressTotal">總計</label>
+            <progress id="semanticProgressTotal" max="1" value="0"></progress>
+            <span id="semanticProgressTotalText"></span>
+          </div>
+          <p class="semantic-progress-note">可以關閉這個視窗繼續瀏覽，下載會在背景進行。</p>
+          <button id="semanticCancelButton" type="button">取消下載</button>
+        </div>
+
+        <div id="semanticManage" class="semantic-manage">
+          <button id="semanticDisableButton" type="button" hidden>關閉語意搜尋</button>
+          <button id="semanticClearButton" type="button" hidden>清除已下載資料</button>
         </div>
       </div>
     </dialog>

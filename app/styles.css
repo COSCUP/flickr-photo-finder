@@ -36,6 +36,7 @@
   --icon-copy: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 8h11v11H8zM5 16H4a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2h10a1 1 0 0 1 1 1v1' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --icon-download: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3v12m0 0 5-5m-5 5-5-5M5 19h14' fill='none' stroke='black' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   --icon-external: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6' fill='none' stroke='black' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --icon-similar: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M3 4h10v10H3zM11 10h10v10H11' fill='none' stroke='black' stroke-width='2.1' stroke-linejoin='round'/%3E%3C/svg%3E");
   --icon-table: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 5h16v14H4zM4 10h16M9 5v14M15 5v14' fill='none' stroke='black' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
@@ -2206,5 +2207,279 @@ select {
 
   .autocomplete-field input {
     min-height: 42px;
+  }
+}
+
+/* Opt-in semantic search */
+.semantic-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+}
+
+.semantic-bar[hidden],
+.result-tabs[hidden],
+.semantic-dialog [hidden],
+.preview-actions [hidden] {
+  display: none;
+}
+
+.semantic-button {
+  font-weight: 700;
+}
+
+.semantic-button.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.semantic-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.semantic-status[data-status="needs-download"],
+.semantic-status[data-status="error"] {
+  color: var(--amber);
+  font-weight: 750;
+}
+
+.result-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.result-tab {
+  min-height: 40px;
+  margin-bottom: -1px;
+  border: 1px solid transparent;
+  border-bottom-color: var(--line);
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  color: var(--muted-strong);
+  font-weight: 700;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.result-tab.is-active {
+  border-color: var(--line);
+  border-bottom-color: var(--bg);
+  background: var(--bg);
+  color: var(--accent-strong);
+}
+
+.find-similar-button {
+  --action-icon: var(--icon-similar);
+}
+
+.semantic-dialog {
+  width: min(620px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  padding: 20px;
+  overflow: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgb(15 23 42 / 24%);
+  color: var(--text);
+}
+
+.semantic-dialog::backdrop {
+  background: var(--backdrop);
+}
+
+.semantic-dialog-body {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.semantic-dialog-body p {
+  margin: 0;
+  font-size: 14px;
+}
+
+.semantic-dialog-note,
+.semantic-progress-note {
+  color: var(--muted);
+}
+
+.semantic-dialog-message {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.semantic-choice,
+.semantic-progress {
+  display: grid;
+  gap: 12px;
+}
+
+.semantic-size-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.semantic-size-table caption {
+  margin-bottom: 6px;
+  color: var(--muted-strong);
+  font-weight: 750;
+  text-align: left;
+}
+
+.semantic-size-table th,
+.semantic-size-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.semantic-size-table td:nth-child(2) {
+  white-space: nowrap;
+}
+
+.semantic-size-table td:nth-child(3) {
+  overflow-wrap: anywhere;
+}
+
+.semantic-size-table thead th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.semantic-size-table tbody th {
+  font-weight: 650;
+}
+
+.semantic-size-table tfoot th,
+.semantic-size-table tfoot td {
+  border-bottom: 0;
+  font-weight: 800;
+}
+
+.semantic-data-warning {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--panel-subtle);
+  color: var(--muted-strong);
+}
+
+.semantic-dialog-actions,
+.semantic-manage {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.semantic-dialog-actions .is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 750;
+}
+
+.semantic-dialog-actions .is-primary:not(:disabled):hover {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: var(--on-accent);
+}
+
+.semantic-manage {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.semantic-progress-row {
+  display: grid;
+  grid-template-columns: 6em minmax(0, 1fr) 9.5em;
+  gap: 10px;
+  align-items: center;
+  font-size: 14px;
+}
+
+.semantic-progress-row span {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.semantic-progress-row.is-total {
+  font-weight: 750;
+}
+
+.semantic-progress progress {
+  width: 100%;
+  height: 10px;
+  accent-color: var(--accent);
+}
+
+.semantic-progress > button {
+  justify-self: start;
+}
+
+@media (max-width: 760px) {
+  .semantic-bar {
+    margin: 8px 0 0;
+  }
+
+  .semantic-bar .semantic-button {
+    flex: 1 1 100%;
+  }
+
+  .result-tabs {
+    overflow-x: auto;
+  }
+
+  .result-tab {
+    flex: 1 0 auto;
+    min-height: 44px;
+  }
+
+  .semantic-dialog {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92vh;
+    margin: auto 0 0;
+    padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+    border-radius: 12px 12px 0 0;
+  }
+
+  .semantic-dialog-actions button,
+  .semantic-manage button {
+    flex: 1 1 100%;
+  }
+
+  .semantic-progress-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .semantic-progress-row progress {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .photo-preview-dialog:has(#previewSimilarButton:not([hidden])) {
+    padding-bottom: 240px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .result-tab {
+    transition: none;
+  }
+
+  .semantic-progress progress:indeterminate {
+    animation: none;
   }
 }

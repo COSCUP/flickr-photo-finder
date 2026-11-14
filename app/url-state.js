@@ -68,7 +68,24 @@ export function encodeUrlState(state) {
   if (selected.length > 0) {
     params.set("selected", selected.join(","));
   }
+  // Semantic views only describe what was shown; whether semantic search is
+  // enabled is a per-device setting and never goes into the URL.
+  const view = cleanResultView(state.view);
+  if (view) {
+    params.set("view", view);
+  }
+  const similar = String(state.similar ?? "").trim();
+  if (similar) {
+    params.set("similar", similar);
+  }
   return params;
+}
+
+export const resultViews = ["semantic", "keyword"];
+
+function cleanResultView(value) {
+  const view = String(value ?? "").trim();
+  return resultViews.includes(view) ? view : "";
 }
 
 export function finderStateUrl(href, state) {
@@ -90,5 +107,7 @@ export function decodeUrlState(params) {
     sort: params.get("sort") ?? "",
     filters,
     selectedPhotoIds: (params.get("selected") ?? "").split(",").filter(Boolean),
+    view: cleanResultView(params.get("view")),
+    similar: String(params.get("similar") ?? "").trim(),
   };
 }
