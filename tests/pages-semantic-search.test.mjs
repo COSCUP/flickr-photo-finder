@@ -63,6 +63,7 @@ function meta(overrides = {}) {
     rowBytes: 516,
     rowCount: 3,
     queryPrefix: "task: search result | query: ",
+    sourceModel: "EmbeddingGemma 2 (8-bit, 768d truncated to 512d)",
     queryModel: { id: "onnx-community/embeddinggemma-2-ONNX", revision: "abc", dtype: "q4" },
     photosSha256: "f".repeat(64),
     sets: {
@@ -79,6 +80,8 @@ describe("semantic vector parsing", () => {
     assert.equal(parsed.rowCount, 3);
     assert.equal(parsed.sets.image.file, "image-int8.bin");
     assert.equal(parsed.queryModel.dtype, "q4");
+    assert.equal(parsed.sourceModel, "EmbeddingGemma 2 (8-bit, 768d truncated to 512d)");
+    assert.equal(parseVectorMeta(meta({ sourceModel: undefined })).sourceModel, "");
     assert.throws(() => parseVectorMeta(meta({ rowBytes: 512 })), /每列大小/);
     assert.throws(() => parseVectorMeta(meta({ formatVersion: "other" })), /不支援/);
     assert.throws(

@@ -2310,6 +2310,20 @@ select {
   color: var(--muted);
 }
 
+.semantic-model-info {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.semantic-model-info ul {
+  margin: 4px 0 0;
+  padding-left: 1.2em;
+}
+
+.semantic-model-info a {
+  overflow-wrap: anywhere;
+}
+
 .semantic-dialog-message {
   padding: 8px 10px;
   border-radius: 8px;

@@ -9,6 +9,7 @@ import {
   embeddingQueryModel,
   embeddingQueryPrefix,
   embeddingRowBytes,
+  embeddingSourceModel,
   sha256Hex,
 } from "../lib/finder/embeddings.mjs";
 import { finderVectorsDir } from "../lib/pages/finder-embeddings.mjs";
@@ -236,6 +237,9 @@ async function assertSemanticVectors(artifactDir, metaUrl) {
   }
   if (meta.queryPrefix !== embeddingQueryPrefix) {
     throw new Error("vectors meta.json queryPrefix does not match the embedding contract");
+  }
+  if (meta.sourceModel !== embeddingSourceModel) {
+    throw new Error("vectors meta.json sourceModel does not match the embedding contract");
   }
   if (["id", "revision", "dtype"].some((key) => meta.queryModel?.[key] !== embeddingQueryModel[key])) {
     throw new Error("vectors meta.json queryModel does not match the embedding contract");

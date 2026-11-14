@@ -57,6 +57,7 @@ export function parseVectorMeta(payload) {
     rowBytes,
     rowCount,
     queryPrefix: String(payload.queryPrefix ?? ""),
+    sourceModel: String(payload.sourceModel ?? ""),
     queryModel: {
       id: String(payload.queryModel?.id ?? ""),
       revision: String(payload.queryModel?.revision ?? ""),

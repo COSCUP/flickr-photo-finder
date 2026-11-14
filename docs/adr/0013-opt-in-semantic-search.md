@@ -29,6 +29,7 @@ PoC 評測的方式如下：
   - 照片向量來自同一個 Pages 部署，文字與圖片兩份合計約 35 MB；只用以圖找圖時只下載圖片向量，約 18 MB。
   - 查詢文字模型來自 huggingface.co，固定 revision，約 206 MB。
   - transformers.js 與 ONNX Runtime WASM 來自 jsDelivr，固定版本 4.3.2，約 28 MB。
+- **揭露使用的模型**：對話框列出照片向量與查詢使用的模型、量化方式、固定 revision 與授權（Google EmbeddingGemma 2，Apache 2.0），內容取自部署的 `vectors/meta.json`。
 - **查詢不離開瀏覽器**：查詢文字只在瀏覽器內由 Web Worker 轉成向量，不送往任何第三方，也不送進 GA4。但模型與函式庫的下載請求會連到 huggingface.co 與 jsDelivr，這是使用者開啟前必須被告知的事實。
 - **文字語意搜尋只支援 WebGPU**：EmbeddingGemma 2 的 q4、q4f16、q8 模型都使用 `GatherBlockQuantized` 運算子，ORT-web 的 WASM 後端沒有這個實作；能在 WASM 執行的 fp16（約 542 MB）與 fp32（約 1 GB）太大，不適合讓瀏覽器下載。因此不支援 WebGPU 的瀏覽器，對話框會停用文字語意搜尋，只提供以圖找圖（以圖找圖只用圖片向量，不需要模型）。
 - **向量來源與格式**：由維護者在本機用 EmbeddingGemma 2 8-bit 產生文字向量與圖片向量，截斷到 512 維後以 int8 逐列量化。文字向量的輸入是相簿標題加 AI 視覺描述與場景、氛圍、用途標籤；圖片向量只使用 Flickr 縮圖。

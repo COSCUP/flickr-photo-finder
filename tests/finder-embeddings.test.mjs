@@ -211,6 +211,7 @@ describe("finder embedding Pages artifact", () => {
     });
     assert.equal(payloads.meta.rowCount, 4);
     assert.equal(payloads.meta.photosSha256, "abc");
+    assert.match(payloads.meta.sourceModel, /^EmbeddingGemma 2 /);
     assert.deepEqual(Object.keys(payloads.meta.sets), ["text"]);
     const set = payloads.meta.sets.text;
     assert.equal(set.bytes, 4 * 516);

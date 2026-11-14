@@ -358,6 +358,14 @@
         <p class="semantic-dialog-note">
           需要先下載資料，查詢內容只在你的瀏覽器裡計算，不會送出。結果依相似度排序，不代表照片一定符合；以圖找圖比較的是整體畫面，不辨識人物。
         </p>
+        <div class="semantic-model-info">
+          <p><strong>使用的模型</strong></p>
+          <ul>
+            <li>照片向量：<span id="semanticSourceModel">EmbeddingGemma 2 (8-bit, 768d truncated to 512d)</span>。每張照片的描述文字與縮圖各一份，事先在維護者的電腦上算好。</li>
+            <li>查詢：<a id="semanticQueryModelLink" href="https://huggingface.co/onnx-community/embeddinggemma-2-ONNX" target="_blank" rel="noreferrer">onnx-community/embeddinggemma-2-ONNX</a>（<span id="semanticQueryModelDetail">q4</span>），在你的瀏覽器裡用 transformers.js 4.3.2 與 ONNX Runtime Web 執行。</li>
+            <li>兩者都是 <a href="https://huggingface.co/google/embeddinggemma-2" target="_blank" rel="noreferrer">Google EmbeddingGemma 2</a>，授權為 Apache 2.0。</li>
+          </ul>
+        </div>
         <p id="semanticDialogMessage" class="semantic-dialog-message" role="status" hidden></p>
         <p id="semanticWebGpuNote" class="semantic-dialog-message" hidden></p>
 

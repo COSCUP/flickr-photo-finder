@@ -111,6 +111,9 @@ function queryDom() {
     sizeRuntimeRow: byId("semanticSizeRuntimeRow"),
     sizeTotalRow: byId("semanticSizeTotalRow"),
     sizeModel: byId("semanticSizeModel"),
+    sourceModel: byId("semanticSourceModel"),
+    queryModelLink: byId("semanticQueryModelLink"),
+    queryModelDetail: byId("semanticQueryModelDetail"),
     sizeRuntime: byId("semanticSizeRuntime"),
     sizeTotal: byId("semanticSizeTotal"),
     enableFull: byId("semanticEnableFullButton"),
@@ -727,6 +730,25 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     dom.sizeRuntime.textContent = `約 ${formatMegabytes(estimatedBytes.runtime)}`;
     dom.sizeTotal.textContent = `約 ${formatMegabytes(vectorBytes + estimatedBytes.model + estimatedBytes.runtime)}`;
     dom.enableImage.textContent = `只下載以圖找圖（約 ${formatMegabytes(imageBytes)}）`;
+    renderModelInfo();
+  }
+
+  // The dialog names the exact models from the deployed meta.json, so the
+  // disclosure follows the data when the model or its revision changes.
+  function renderModelInfo() {
+    const meta = state.meta;
+    if (!meta) {
+      return;
+    }
+    if (meta.sourceModel) {
+      dom.sourceModel.textContent = meta.sourceModel;
+    }
+    const { id, revision, dtype } = meta.queryModel;
+    if (id) {
+      dom.queryModelLink.textContent = id;
+      dom.queryModelLink.href = `${modelHost}/${id}${revision ? `/tree/${encodeURIComponent(revision)}` : ""}`;
+    }
+    dom.queryModelDetail.textContent = [dtype, revision ? `版本 ${revision.slice(0, 7)}` : ""].filter(Boolean).join("，");
   }
 
   function statusText() {
