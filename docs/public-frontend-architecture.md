@@ -117,6 +117,43 @@ GitHub Pages Finder 可以註冊 service worker，讓已開啟過的公開搜尋
 
 這個快取不是第二份資料庫。正式資料權威仍是 Google Sheets，部署 artifact 仍由 `pnpm finder:build` 從公開資料產生。`runtime-csv` 模式保留為開發與緊急 fallback，不承諾完整 PWA 離線體驗。
 
+## 可選開啟的語意搜尋
+
+語意搜尋與以圖找圖是使用者主動開啟的選用功能，決策背景與取捨記錄在 [ADR 0013](adr/0013-opt-in-semantic-search.md)，維護者產生向量的流程在 `docs/semantic-search-maintenance.md`。預設不下載任何向量或模型，原本的關鍵字搜尋不受影響。
+
+### 資料流
+
+1. 維護者在本機用 `pnpm finder:embed` 產生向量分段，放在 `data/embeddings/`。
+2. `pnpm finder:build` 讀取分段，依 `photos-index.json` 的列順序，輸出 `data/finder-data/vectors/`：`meta.json`、`text-int8.bin`、`image-int8.bin`。每列 516 bytes：512 個 int8 加上 1 個 float32 scale；scale 為 0 表示該照片沒有這種向量。
+3. 使用者在對話框確認後，前端下載向量、模型與函式庫：向量來自 Pages，模型來自 huggingface.co（固定 revision），transformers.js 與 WASM 來自 jsDelivr（固定 4.3.2）。所有 Hugging Face 請求都固定在同一個 revision，包含 tokenizer 的預檢。
+4. 查詢文字在 `semantic-worker.js`（Web Worker）內轉成向量，主執行緒以 `semantic-search.js` 對照片向量做 cosine 排名，再以 RRF 合併文字與圖片排名。查詢文字與向量不離開瀏覽器。
+
+`data/embeddings/` 不存在或沒有分段時，build 不產生 `vectors/`，設定中的向量 URL 為空字串，前端隱藏語意搜尋入口。`semantic-worker.js` 不在 import graph 內，由 build 明確複製進 artifact。
+
+### 瀏覽器需求
+
+文字語意搜尋只支援 WebGPU。EmbeddingGemma 2 的 q4、q4f16、q8 模型都使用 ORT-web 的 WASM 後端沒有實作的 `GatherBlockQuantized` 運算子，而可在 WASM 執行的 fp16（約 542 MB）與 fp32（約 1 GB）不適合給瀏覽器下載，所以沒有 WASM 後備路徑。不支援 WebGPU 的瀏覽器在對話框中停用文字語意搜尋，只提供以圖找圖（只用圖片向量，不需要模型）。
+
+### 快取策略
+
+- service worker 對 `data/finder-data/vectors/` 完全不處理，也不放進 precache，避免快取優先策略在背景重複下載數十 MB。
+- 向量由前端自己的 Cache API 管理，快取名稱為 `photo-finder-semantic-vectors-<sha256>`，內容沒變就能跨部署沿用。名稱刻意不用 `coscup-photo-finder-` 開頭，因為 service worker 在 activate 時會刪除該前綴下不屬於本次部署的快取。
+- 模型與 WASM 由 transformers.js 寫入 `transformers-cache`。
+- 取消下載或下載失敗時，會自動清除已下載的部分資料，避免留下不完整的快取。
+- 開啟狀態存在 localStorage，不放進 URL。下次進站只有在 Cache API 確認檔案都已快取時才自動載入，否則提示需要重新下載，不會自動下載。
+- 使用者可在對話框清除已下載資料，會同時刪除自己的 Cache 與 `transformers-cache`。
+
+### 結果分頁與 URL 參數
+
+- 語意搜尋就緒且有查詢時，結果上方出現兩個分頁：「語意相近」（前 N 張，N 來自 `data/interface-registry.json` 的 `semanticTopK`）與「關鍵字命中」。預設為語意。
+- 關鍵字分頁維持原本行為。語意分頁套用其他篩選，但忽略排序選單；沒有向量的照片只出現在關鍵字分頁。摘要必須說明這是依相似度排序的前 N 張，不代表全部符合，遵守 [ADR 0007](adr/0007-finder-index-results-are-not-absence-proof.md)。
+- 預覽對話框的「找相似照片」只使用圖片向量，不需要文字模型；結果以可移除的「相似於」chip 呈現。以圖找圖會記住原本的查詢，移除 chip 時還原。
+- URL 參數 `view=semantic|keyword` 記錄分頁，`similar=<photo_id>` 記錄以圖找圖的來源照片。語意搜尋是否開啟不放進 URL；對方沒開啟時，分享連結退回關鍵字搜尋。
+
+### 邊界
+
+語意搜尋使用一般圖片與文字 embedding 的整體相似度，不是人臉辨識或人物分群，不提供辨識或追蹤特定人物的功能，邊界見 [ADR 0008](adr/0008-photo-index-product-boundary.md)。
+
 ## 上線前準備
 
 使用 GitHub Pages 讀取正式 Google Sheets 前，維護者需要確認：

@@ -30,3 +30,4 @@
 | [0010](0010-ai-prompt-review-governance.md) | Accepted | AI prompt review 採 evidence 與 owner 決策 gate，不自動套用模型或工具建議。 |
 | [0011](0011-photo-workspace-visual-design.md) | Accepted | 採用照片優先的工作台，兼顧桌面、平板與手機的找圖操作；明暗外觀屬於個人偏好，獨立於分享狀態。 |
 | [0012](0012-fork-and-adapt-for-coscup.md) | Accepted | 將 Photo Finder 衍生並在地化為 COSCUP 專案，承接既有架構並更新品牌與贊助方案。 |
+| [0013](0013-opt-in-semantic-search.md) | Accepted | 可選開啟的語意搜尋與以圖找圖：純靜態、使用者主動下載、查詢不離開瀏覽器；結果不代表照片有或沒有，也不是人物辨識。 |

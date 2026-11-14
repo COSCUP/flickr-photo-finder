@@ -61,6 +61,7 @@ flowchart TD
 | 任務 | 先從這裡開始 | 補讀或邊界提醒 |
 | --- | --- | --- |
 | 我要修改公開前端 | `docs/public-frontend-architecture.md` | 先確認正式資料來源、本機 fixture/export 模式、前端模組邊界、artifact build/check 與 GitHub Pages 部署邊界。 |
+| 我要更新語意搜尋的照片向量 | `docs/semantic-search-maintenance.md` | 新增相簿或大量修改描述後，在本機用 `pnpm finder:embed` 補算；決策背景看 `docs/adr/0013-opt-in-semantic-search.md`。 |
 | 我要修改 Apps Script | `docs/apps-script-maintenance-design.md` | 先確認 clasp 綁定、target、GeneratedConfig、Sheets-side validation 與練習表/正式表邊界。 |
 | 我要新增或修改 CLI/CI smoke test | `docs/command-smoke-tests.md` | 先確認 command 是否可在無 credential CI 跑；credential、網路與 write flow 不應混進預設 smoke。 |
 | 我要修改 taxonomy 或欄位 schema | `真理來源` 與 `共用字串歸屬` | 實際 source 是 `data/tag-taxonomy.json` 與 `data/photo-schema.json`；改完需依影響範圍同步 Apps Script、前端或 validation，並執行 `pnpm data:validate`。 |
@@ -142,6 +143,7 @@ flowchart TD
 | 公開前端索引與空結果信任邊界 | `docs/adr/0007-finder-index-results-are-not-absence-proof.md` | Finder 是 Flickr 上方的索引輔助；搜尋、篩選與空結果不可作為 Flickr 照片不存在的判定。 |
 | 產品定位與人物身份索引邊界 | `docs/adr/0008-photo-index-product-boundary.md` | Photo Finder 是任務導向照片索引，不是 Flickr 替代品、原圖保存庫或人物身份索引。 |
 | 照片 metadata 欄位語意邊界 | `docs/adr/0009-photo-metadata-field-boundaries.md` | 欄位 source of truth 仍在 `data/photo-schema.json` / `data/tag-taxonomy.json`；ADR 記錄欄位分工與取捨。 |
+| 可選開啟的語意搜尋與以圖找圖 | `docs/adr/0013-opt-in-semantic-search.md` | 使用者主動開啟、查詢不離開瀏覽器、結果不代表照片有或沒有、不是人物辨識；向量維護流程看 `docs/semantic-search-maintenance.md`。 |
 | 前端使用行為分析設計 | `docs/frontend-analytics-design.md` | 導入 GA4 或分析前，先確認目前前端狀態、事件邊界、隱私限制與後續分析流程。 |
 | GA4 後台操作與 service account 權限 | `docs/ga4-operations.md` | 管理 GA4 權限、service account 加入 property、custom dimensions 與 BigQuery 延後策略。 |
 | GA4 custom dimensions 註冊清單 | `config/ga4-custom-dimensions.json` | 低基數 event-scoped custom dimensions 的 repo source of truth；不要加入 `photo_id`、`content_id`、`search_term`、`result_rank`。 |
