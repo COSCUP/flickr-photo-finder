@@ -100,6 +100,18 @@ pnpm finder:check
 | 前端沒有語意搜尋入口 | `data/embeddings/` 沒有分段，build 沒有產生向量 | 先產生分段，再 build。 |
 | 某些照片只出現在關鍵字分頁 | 該照片還沒有向量 | 執行 `pnpm finder:embed` 補算。 |
 
+## 前端除錯
+
+在網址加上 `?semantic-debug` 時，畫面左下角會顯示查詢模型的載入計時與每次查詢的耗時，並以 `./semantic-debug?kind=...` 請求送回服務該頁的主機（正式站會回 404，只在本機伺服器的 log 有用）。沒有這個參數時只會在 console 印一行計時，不影響畫面與網路。
+
+| 參數 | 用途 |
+| --- | --- |
+| `semantic-debug` | 開啟除錯。計時欄位：`import`、`config`、`runtime`、`tokenizer`、`modelFiles`（模型檔下載或從快取讀完）、`session`（WebGPU session 建好）、`warmup`（第一次推論完成），另附 GPU 型號與支援的功能。 |
+| `semantic-placement` | 搭配 `semantic-debug`，回報 ONNX Runtime 把哪些節點分配到 CPU。 |
+| `semantic-dtype=q4f16` | 搭配 `semantic-debug`，改用同一個模型的其他量化版本做比較。 |
+
+手機上要測文字語意搜尋，需要 HTTPS 或 localhost，否則瀏覽器不提供 WebGPU 與 Cache API。
+
 ## 參考數字
 
 mlx-serve 8-bit 在 M5 Max 上的實測：文字每秒約 365 至 390 筆（批次 16），圖片每秒約 17 張。mlx-serve 的圖片沒有批次，一次只能送一張，並發也不會加速。全部約 34k 張圖片約需 33 分鐘，文字約 1.5 分鐘。日常只補差異時通常在數分鐘內完成。換其他機器或引擎時速度會不同，只作為估算時間的參考。

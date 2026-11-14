@@ -10,7 +10,9 @@ export const vectorCachePrefix = "photo-finder-semantic-vectors-";
 export const modelCacheName = "transformers-cache";
 export const modelCacheFiles = ["onnx/model_q4.onnx", "onnx/model_q4.onnx_data", "tokenizer.json", "tokenizer_config.json"];
 const modelHost = "https://huggingface.co";
-const estimatedBytes = { model: 206_000_000, runtime: 28_000_000, vectorSet: 17_715_312 };
+// Transfer sizes. The runtime (transformers.js plus the ORT WASM binary) comes
+// compressed from jsDelivr: about 5.7 MB on the wire, 27 MB once decoded.
+const estimatedBytes = { model: 206_000_000, runtime: 5_700_000, vectorSet: 17_715_312 };
 const embeddingCacheSize = 32;
 
 export const noWebGpuMessage = "這個瀏覽器不支援 WebGPU，無法執行文字語意搜尋；仍可使用以圖找圖。";
@@ -53,6 +55,37 @@ export function writeSemanticPreference(mode, storage = globalThis.localStorage)
   } catch {
     // The feature still works for this page when storage is blocked.
   }
+}
+
+// `?semantic-debug` shows query-model timings on the page and sends them to
+// the serving host, so a slow phone can be diagnosed without remote DevTools.
+// `semantic-placement` reports which execution provider ORT assigned nodes to
+// and `semantic-dtype` tries another quantization of the same model; both
+// need `semantic-debug`.
+const debugParams = (() => {
+  try {
+    return new URLSearchParams(globalThis.location?.search ?? "");
+  } catch {
+    return new URLSearchParams();
+  }
+})();
+const semanticDebug = debugParams.has("semantic-debug");
+
+function reportTiming(kind, values) {
+  console.info(`[semantic] ${kind}`, values);
+  if (!semanticDebug || typeof document === "undefined") {
+    return;
+  }
+  let panel = document.getElementById("semanticDebugPanel");
+  if (!panel) {
+    panel = document.createElement("pre");
+    panel.id = "semanticDebugPanel";
+    panel.style.cssText = "position:fixed;left:8px;bottom:8px;z-index:9999;max-width:calc(100vw - 16px);margin:0;padding:6px 8px;border-radius:6px;background:rgba(0,0,0,.8);color:#fff;font:11px/1.4 ui-monospace,monospace;white-space:pre-wrap;pointer-events:none";
+    document.body.append(panel);
+  }
+  const line = `${kind} ${Object.entries(values).map(([key, value]) => `${key}=${value}`).join(" ")}`;
+  panel.textContent = `${panel.textContent}${panel.textContent ? "\n" : ""}${line}`.split("\n").slice(-8).join("\n");
+  fetch(`./semantic-debug?${new URLSearchParams({ kind, ua: navigator.userAgent, ...values })}`, { cache: "no-store" }).catch(() => {});
 }
 
 export function modelFileUrls({ id, revision }) {
@@ -128,6 +161,7 @@ function queryDom() {
     progressRuntimeRow: byId("semanticProgressRuntimeRow"),
     progressRuntime: byId("semanticProgressRuntime"),
     progressRuntimeText: byId("semanticProgressRuntimeText"),
+    progressStage: byId("semanticProgressStage"),
     progressTotal: byId("semanticProgressTotal"),
     progressTotalText: byId("semanticProgressTotalText"),
     cancelDownload: byId("semanticCancelButton"),
@@ -160,7 +194,9 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
   let requestSequence = 0;
   const pendingEmbeddings = new Map();
   const embeddings = new Map();
-  const progress = { vectors: new Map(), model: new Map(), runtimeDone: false, includeModel: false };
+  // runtime is a 0–1 fraction (the worker counts decoded bytes). stage becomes
+  // "initializing" when the model files are in and ORT builds the GPU session.
+  const progress = { vectors: new Map(), model: new Map(), runtime: 0, stage: "", includeModel: false };
 
   // Readiness follows the last mode that finished loading, so an upgrade from
   // image-only to full keeps image similarity usable while it downloads.
@@ -414,6 +450,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
 
   function startWorker(meta, token) {
     stopWorker();
+    const workerStartedAt = performance.now();
     const instance = new Worker(new URL("./semantic-worker.js", import.meta.url), { type: "module" });
     worker = instance;
     return new Promise((resolve, reject) => {
@@ -425,14 +462,25 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         if (message.type === "progress") {
           progress.model.set(message.file, { loaded: message.loaded, total: message.total });
           renderProgress();
+        } else if (message.type === "runtime-progress") {
+          progress.runtime = message.total > 0 ? Math.min(message.loaded / message.total, 1) : 0;
+          renderProgress();
+        } else if (message.type === "log") {
+          reportTiming("log", { level: message.level, text: message.text });
+        } else if (message.type === "stage") {
+          progress.stage = message.stage;
+          renderProgress();
         } else if (message.type === "ready") {
           workerReady = true;
-          progress.runtimeDone = true;
+          progress.runtime = 1;
+          progress.stage = "";
           renderProgress();
+          reportTiming("load", { total: Math.round(performance.now() - workerStartedAt), ...message.timings });
           resolve(message.device);
         } else if (message.type === "embedding") {
           const pending = pendingEmbeddings.get(message.requestId);
           pendingEmbeddings.delete(message.requestId);
+          reportTiming("embed", { ms: message.ms });
           pending?.resolve(message.vector);
         } else if (message.type === "error") {
           if (message.requestId !== undefined) {
@@ -457,7 +505,9 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         type: "load",
         modelId: meta.queryModel.id,
         revision: meta.queryModel.revision,
-        dtype: meta.queryModel.dtype || "q4",
+        dtype: (semanticDebug && debugParams.get("semantic-dtype")) || meta.queryModel.dtype || "q4",
+        debug: semanticDebug,
+        placement: semanticDebug && debugParams.has("semantic-placement"),
         dims: meta.dims,
         queryPrefix: meta.queryPrefix,
       });
@@ -467,7 +517,8 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
   function resetProgress(mode, kinds) {
     progress.vectors = new Map(kinds.map((kind) => [kind, { loaded: 0, total: state.meta?.sets[kind]?.bytes ?? estimatedBytes.vectorSet }]));
     progress.model = new Map();
-    progress.runtimeDone = false;
+    progress.runtime = 0;
+    progress.stage = "";
     progress.includeModel = mode === "full";
   }
 
@@ -672,7 +723,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       if (workerReady) {
         modelLoaded = modelTotal;
       }
-      loaded += modelLoaded + (progress.runtimeDone ? estimatedBytes.runtime : 0);
+      loaded += modelLoaded + progress.runtime * estimatedBytes.runtime;
       total += modelTotal + estimatedBytes.runtime;
     }
     return { loaded, total, vectorLoaded, vectorTotal, modelLoaded, modelTotal };
@@ -699,12 +750,14 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     dom.progressRuntimeRow.hidden = !progress.includeModel;
     if (progress.includeModel) {
       setProgress(dom.progressModel, dom.progressModelText, totals.modelLoaded, totals.modelTotal);
-      if (progress.runtimeDone) {
-        setProgress(dom.progressRuntime, null, 1, 1);
-        dom.progressRuntimeText.textContent = "完成";
-      } else {
-        dom.progressRuntime.removeAttribute("value");
-        dom.progressRuntimeText.textContent = `約 ${formatMegabytes(estimatedBytes.runtime)}`;
+      setProgress(dom.progressRuntime, null, progress.runtime, 1);
+      dom.progressRuntimeText.textContent = progress.runtime >= 1 ? "完成" : `${Math.floor(progress.runtime * 100)}%`;
+      // After the downloads finish, building the WebGPU session and compiling
+      // shaders still takes a few seconds with no byte progress to show.
+      const initializing = !workerReady && progress.stage === "initializing";
+      dom.progressStage.hidden = !initializing;
+      if (initializing) {
+        dom.progressStage.textContent = progress.runtime >= 1 ? "下載完成，正在初始化 GPU…" : "模型下載完成，等待執行環境…";
       }
     }
     setProgress(dom.progressTotal, dom.progressTotalText, totals.loaded, totals.total);
@@ -760,6 +813,9 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       case "loading":
         return "正在從瀏覽器快取載入語意搜尋…";
       case "downloading":
+        if (progress.stage === "initializing" && !workerReady && totals.loaded >= totals.total) {
+          return "語意搜尋資料下載完成，正在初始化 GPU…";
+        }
         return `正在下載語意搜尋資料 ${percent}%`;
       case "ready":
         if (state.mode === "full") {

@@ -392,14 +392,14 @@
               </tr>
               <tr id="semanticSizeRuntimeRow">
                 <th scope="row">執行環境</th>
-                <td id="semanticSizeRuntime">約 28 MB</td>
+                <td id="semanticSizeRuntime">約 6 MB</td>
                 <td>jsDelivr</td>
               </tr>
             </tbody>
             <tfoot id="semanticSizeTotalRow">
               <tr>
                 <th scope="row">合計</th>
-                <td id="semanticSizeTotal">約 270 MB</td>
+                <td id="semanticSizeTotal">約 248 MB</td>
                 <td></td>
               </tr>
             </tfoot>
@@ -424,7 +424,7 @@
           </div>
           <div id="semanticProgressRuntimeRow" class="semantic-progress-row">
             <label for="semanticProgressRuntime">執行環境</label>
-            <progress id="semanticProgressRuntime"></progress>
+            <progress id="semanticProgressRuntime" max="1" value="0"></progress>
             <span id="semanticProgressRuntimeText"></span>
           </div>
           <div class="semantic-progress-row is-total">
@@ -432,6 +432,7 @@
             <progress id="semanticProgressTotal" max="1" value="0"></progress>
             <span id="semanticProgressTotalText"></span>
           </div>
+          <p id="semanticProgressStage" class="semantic-progress-stage" role="status" hidden></p>
           <p class="semantic-progress-note">可以關閉這個視窗繼續瀏覽，下載會在背景進行。</p>
           <button id="semanticCancelButton" type="button">取消下載</button>
         </div>

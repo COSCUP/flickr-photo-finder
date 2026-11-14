@@ -2324,6 +2324,11 @@ select {
   overflow-wrap: anywhere;
 }
 
+.semantic-progress-stage {
+  color: var(--muted-strong);
+  font-weight: 700;
+}
+
 .semantic-dialog-message {
   padding: 8px 10px;
   border-radius: 8px;
