@@ -1,9 +1,20 @@
 import { join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { parseArgs as parseNodeArgs } from "node:util";
+import {
+  countCoveredRows,
+  embeddingDims,
+  embeddingFormatVersion,
+  embeddingKinds,
+  embeddingQueryModel,
+  embeddingQueryPrefix,
+  embeddingRowBytes,
+  sha256Hex,
+} from "../lib/finder/embeddings.mjs";
+import { finderVectorsDir } from "../lib/pages/finder-embeddings.mjs";
 import { collectRelativeJavaScriptImportGraph } from "../lib/pages/js-import-graph.mjs";
 import { defaultFinderDataDir } from "../lib/pages/static-finder-data.mjs";
-import { buildFinderDataUrls } from "./build-pages.mjs";
+import { buildFinderDataUrls, semanticWorkerFile } from "./build-pages.mjs";
 
 const defaultArtifactDir = "tmp/pages";
 
@@ -189,6 +200,76 @@ async function assertStaticFinderData(artifactDir) {
   }
 }
 
+async function pathExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function assertSemanticVectors(artifactDir, metaUrl) {
+  const vectorsDir = join(artifactDir, defaultFinderDataDir, finderVectorsDir);
+  if (!metaUrl) {
+    if (await pathExists(vectorsDir)) {
+      throw new Error("config.js finderEmbeddingsMetaUrl is empty but the artifact contains semantic vectors");
+    }
+    return;
+  }
+  if (metaUrl !== `./${defaultFinderDataDir}/${finderVectorsDir}/meta.json`) {
+    throw new Error(`config.js finderEmbeddingsMetaUrl has an unexpected path: ${metaUrl}`);
+  }
+  const meta = await assertJson(join(artifactDir, artifactPathFromUrl(metaUrl)));
+  const manifest = await assertJson(join(artifactDir, defaultFinderDataDir, "manifest.json"));
+  if (meta.formatVersion !== embeddingFormatVersion) {
+    throw new Error("vectors meta.json has an unknown formatVersion");
+  }
+  if (meta.dims !== embeddingDims || meta.rowBytes !== embeddingRowBytes) {
+    throw new Error(`vectors meta.json must use dims ${embeddingDims} and rowBytes ${embeddingRowBytes}`);
+  }
+  if (meta.rowCount !== manifest.rowCount) {
+    throw new Error("vectors meta.json rowCount does not match finder-data manifest rowCount");
+  }
+  if (meta.queryPrefix !== embeddingQueryPrefix) {
+    throw new Error("vectors meta.json queryPrefix does not match the embedding contract");
+  }
+  if (["id", "revision", "dtype"].some((key) => meta.queryModel?.[key] !== embeddingQueryModel[key])) {
+    throw new Error("vectors meta.json queryModel does not match the embedding contract");
+  }
+  if (!meta.photosSha256 || meta.photosSha256 !== manifest.source?.photosSha256) {
+    throw new Error("vectors meta.json photosSha256 does not match finder-data manifest");
+  }
+  const kinds = Object.keys(meta.sets ?? {});
+  if (kinds.length === 0 || kinds.some((kind) => !embeddingKinds.includes(kind))) {
+    throw new Error(`vectors meta.json sets must contain only: ${embeddingKinds.join(", ")}`);
+  }
+  const expectedBytes = meta.rowCount * embeddingRowBytes;
+  for (const kind of kinds) {
+    const set = meta.sets[kind];
+    if (set.file !== `${kind}-int8.bin`) {
+      throw new Error(`vectors meta.json ${kind} file must be ${kind}-int8.bin`);
+    }
+    const path = join(vectorsDir, set.file);
+    await assertFile(path);
+    const data = await readFile(path);
+    if (data.length !== expectedBytes || set.bytes !== expectedBytes) {
+      throw new Error(`${set.file} must be rowCount x ${embeddingRowBytes} = ${expectedBytes} bytes, got ${data.length}`);
+    }
+    if (sha256Hex(data) !== set.sha256) {
+      throw new Error(`${set.file} sha256 does not match vectors meta.json`);
+    }
+    if (countCoveredRows(data) !== set.covered) {
+      throw new Error(`${set.file} covered row count does not match vectors meta.json`);
+    }
+  }
+  await assertFile(join(artifactDir, semanticWorkerFile));
+  await assertJavaScriptImportGraph(artifactDir, semanticWorkerFile);
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   if (options.help) {
@@ -294,6 +375,10 @@ async function main() {
   for (const url of buildFinderDataUrls(dataMode)) {
     await assertJson(join(options.artifactDir, artifactPathFromUrl(url)));
   }
+  if (!/finderEmbeddingsMetaUrl: "[^"]*"/.test(config)) {
+    throw new Error("config.js must include finderEmbeddingsMetaUrl (empty when semantic vectors are skipped)");
+  }
+  await assertSemanticVectors(options.artifactDir, extractConfigString(config, "finderEmbeddingsMetaUrl"));
 
   console.log(`GitHub Pages artifact looks valid: ${options.artifactDir}`);
 }

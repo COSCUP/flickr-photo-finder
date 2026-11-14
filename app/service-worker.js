@@ -29,6 +29,11 @@ function isDetailShardPath(url) {
   return /^data\/finder-data\/shards\/photos-\d+\.json$/.test(normalizedPath(url));
 }
 
+// Semantic search vectors are opt-in downloads cached by the page itself.
+function isSemanticVectorPath(url) {
+  return normalizedPath(url).startsWith("data/finder-data/vectors/");
+}
+
 async function putCache(cacheName, request, response) {
   if (!response || !response.ok) {
     return response;
@@ -114,7 +119,7 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (normalizedPath(url) === "service-worker.js") {
+  if (normalizedPath(url) === "service-worker.js" || isSemanticVectorPath(url)) {
     return;
   }
 
