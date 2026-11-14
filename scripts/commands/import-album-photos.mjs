@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import {
   readAlbumCatalog,
   resolveAlbumInput,
@@ -29,6 +29,8 @@ Options:
   --albums-output <path>  Write an albums CSV with last_processed_at updated for this album.
   --batch-output <path>   Write an import_batches CSV row for this run.
   --reconciliation-output <path>  Write the reviewable reconciliation JSON artifact.
+  --inventories-output <path>     Write the fetched album inventories JSON artifact before metadata fetch.
+  --inventories-input <path>      Read saved album inventories JSON instead of fetching Flickr album lists.
   --imported-at <value>   Import timestamp to write. Default: current time as ISO string.
   --operator <value>      Operator or agent name to record in import_batches.
   --source-tool <value>   Tool name to record in import_batches. Default: pnpm photos:import.
@@ -49,6 +51,8 @@ function parseArgs(argv) {
     help: false,
     input: "",
     importedAt: "",
+    inventoriesInput: "",
+    inventoriesOutput: "",
     operator: "",
     output: "",
     photosExport: sheetsExportPhotosPath,
@@ -86,6 +90,12 @@ function parseArgs(argv) {
       index += 1;
     } else if (arg === "--reconciliation-output") {
       options.reconciliationOutput = args[index + 1] ?? "";
+      index += 1;
+    } else if (arg === "--inventories-output") {
+      options.inventoriesOutput = args[index + 1] ?? "";
+      index += 1;
+    } else if (arg === "--inventories-input") {
+      options.inventoriesInput = args[index + 1] ?? "";
       index += 1;
     } else if (arg === "--imported-at") {
       options.importedAt = args[index + 1] ?? "";
@@ -260,7 +270,17 @@ async function main() {
   const importedAt = options.importedAt || new Date().toISOString();
   console.error(`Progress: reading album catalog from ${options.albums}.`);
   const albums = await readAlbumCatalog(options.albums);
-  const inventories = await fetchInventories(options, albums);
+  let inventories;
+  if (options.inventoriesInput) {
+    console.error(`Progress: reading cached album inventories from ${options.inventoriesInput}.`);
+    inventories = JSON.parse(await readFile(options.inventoriesInput, "utf8"));
+  } else {
+    inventories = await fetchInventories(options, albums);
+    if (options.inventoriesOutput) {
+      console.error(`Progress: writing album inventories cache to ${options.inventoriesOutput}.`);
+      await writeFile(options.inventoriesOutput, `${JSON.stringify(inventories, null, 2)}\n`);
+    }
+  }
   console.error(`Progress: reading existing photos from ${options.photosExport}.`);
   const sourcePhotos = await readPhotoRecords(options.photosExport);
   const sourcePhotoIds = new Set(sourcePhotos.map((photo) => photo.photo_id));
@@ -292,6 +312,12 @@ async function main() {
     photos: sourcePhotos,
     scope: options.allAlbums ? "catalog" : "album",
   });
+
+  if (options.reconciliationOutput) {
+    await writeFile(options.reconciliationOutput, `${JSON.stringify(reconciliation, null, 2)}\n`);
+    console.log(`Wrote reconciliation plan to ${options.reconciliationOutput}.`);
+  }
+
   const memberships = albumMemberships(inventories);
   const photoById = new Map();
   for (const inventory of inventories) {
@@ -302,8 +328,48 @@ async function main() {
     }
   }
 
-  console.error(`Progress: fetching Flickr metadata for ${reconciliation.new_photo_ids.length} new photo(s).`);
-  let completedMetadataCount = 0;
+  // Support resuming: check if output file already has partially fetched photo rows.
+  const cachedPhotosById = new Map();
+  if (options.output) {
+    try {
+      const existingCsv = await readFile(options.output, "utf8");
+      const [existingHeaders, ...existingRows] = parseCsv(existingCsv);
+      if (existingHeaders && existingHeaders.join(",") === photoHeaders.join(",")) {
+        const idCol = photoHeaders.indexOf("photo_id");
+        for (const row of existingRows) {
+          const pid = row[idCol];
+          if (pid) {
+            cachedPhotosById.set(pid, toCsvLine(photoHeaders, Object.fromEntries(photoHeaders.map((h, i) => [h, row[i] ?? ""]))));
+          }
+        }
+      }
+    } catch {}
+  }
+
+  // Filter cached rows to only those that are STILL considered new in this reconciliation
+  const targetNewIdSet = new Set(reconciliation.new_photo_ids);
+  const existingOutputPhotoIds = new Set();
+  const rows = [];
+  for (const id of reconciliation.new_photo_ids) {
+    if (cachedPhotosById.has(id)) {
+      existingOutputPhotoIds.add(id);
+      rows.push(cachedPhotosById.get(id));
+    }
+  }
+
+  // Initialize/overwrite output file with headers and currently valid cached rows
+  if (options.output) {
+    const initialContent = rows.length > 0
+      ? `${photoHeaders.join(",")}\n${rows.join("\n")}\n`
+      : `${photoHeaders.join(",")}\n`;
+    await writeFile(options.output, initialContent);
+  }
+
+  const remainingPhotoIds = reconciliation.new_photo_ids.filter((id) => !existingOutputPhotoIds.has(id));
+  console.error(
+    `Progress: fetching Flickr metadata for ${remainingPhotoIds.length} new photo(s) (${existingOutputPhotoIds.size} already fetched).`,
+  );
+  let completedMetadataCount = existingOutputPhotoIds.size;
   let lastMetadataPhotoId = "";
   const shouldPrintMetadataProgress = createProgressThrottle();
 
@@ -314,8 +380,7 @@ async function main() {
     console.error(`Progress: photo metadata ${completedMetadataCount}/${reconciliation.new_photo_ids.length} complete (${lastMetadataPhotoId}).`);
   }
 
-  const rows = [];
-  for (const photoId of reconciliation.new_photo_ids) {
+  for (const photoId of remainingPhotoIds) {
     const { inventory, photo } = photoById.get(photoId) ?? {};
     if (!inventory || !photo) {
       throw new Error(`Missing Flickr source details for new photo ${photoId}`);
@@ -333,13 +398,14 @@ async function main() {
       },
     });
     rows.push(...newRows);
+    if (options.output) {
+      await appendFile(options.output, `${newRows.join("\n")}\n`);
+    }
   }
   printMetadataProgress({ force: true });
   const csv = toPhotoCsv(rows);
 
   if (options.output) {
-    console.error(`Progress: writing photo candidate CSV to ${options.output}.`);
-    await writeFile(options.output, csv);
     if (options.validate) {
       validatePath("--photos", options.output);
     }
@@ -385,11 +451,6 @@ async function main() {
       validatePath("--import-batches", options.batchOutput);
     }
     console.log(`Wrote ${batches.length} import batch row(s) to ${options.batchOutput}.`);
-  }
-
-  if (options.reconciliationOutput) {
-    await writeFile(options.reconciliationOutput, `${JSON.stringify(reconciliation, null, 2)}\n`);
-    console.log(`Wrote reconciliation plan to ${options.reconciliationOutput}.`);
   }
 
   console.error(`Reconciliation: ${rows.length} new, ${reconciliation.counts.membership_updated} membership update(s), ${reconciliation.counts.deleted} deletion(s), ${reconciliation.counts.reordered} reordered photo(s).`);
