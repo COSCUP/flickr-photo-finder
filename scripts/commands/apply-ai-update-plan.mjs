@@ -1,8 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createSheetsService, explainGoogleSheetsError, quoteSheetName } from "../lib/sheets/google-sheets-client.mjs";
 import { googleSheetsSpreadsheetId } from "../lib/core/project-config.mjs";
-import { allowedAiFieldSet, aiFieldLayerName, photoHeaders } from "../lib/core/photo-schema.mjs";
+import { allowedAiFieldSet, aiFieldLayerName, albumHeaders, photoHeaders } from "../lib/core/photo-schema.mjs";
 
 const defaultPlanFile = "metadata-update-plan.json";
 
@@ -337,6 +337,109 @@ async function verifyApplied(sheets, spreadsheetId, cellPlan) {
   }
 }
 
+async function updateCompletedAlbumNotes(sheets, spreadsheetId, runDir) {
+  if (!runDir) return;
+
+  let modelName = "gpt-5.6-luna low";
+  let targetAlbumIds = new Set();
+  try {
+    const manifest = JSON.parse(await readFile(join(runDir, "manifest.json"), "utf8"));
+    if (manifest.model) {
+      modelName = manifest.model;
+    }
+    const reqIds = manifest.requested_album_ids || (manifest.requested_album_id ? [manifest.requested_album_id] : []);
+    targetAlbumIds = new Set(reqIds);
+  } catch {}
+
+  // 僅限當前 run 處理的相簿清單，不得影響其他相簿
+  if (targetAlbumIds.size === 0) {
+    return;
+  }
+
+  const [photosRes, albumsRes] = await Promise.all([
+    sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${quoteSheetName("photos")}!A:ZZ`,
+    }),
+    sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${quoteSheetName("albums")}!A:H`,
+    }),
+  ]);
+
+  const photoRows = photosRes.data.values ?? [];
+  const albumRows = albumsRes.data.values ?? [];
+
+  const albumIdCol = photoHeaders.indexOf("album_ids");
+  const curationStatusCol = photoHeaders.indexOf("curation_status");
+  const albumSheetIdCol = albumHeaders.indexOf("album_id");
+  const notesCol = albumHeaders.indexOf("notes");
+
+  const albumPhotoCounts = new Map();
+  for (let i = 1; i < photoRows.length; i++) {
+    const row = photoRows[i];
+    const albumIds = (row[albumIdCol] ?? "").split(";").filter(Boolean);
+    const isLabeled = (row[curationStatusCol] ?? "") === "ai_labeled";
+    for (const aid of albumIds) {
+      if (!targetAlbumIds.has(aid)) continue;
+      if (!albumPhotoCounts.has(aid)) {
+        albumPhotoCounts.set(aid, { total: 0, labeled: 0 });
+      }
+      const st = albumPhotoCounts.get(aid);
+      st.total += 1;
+      if (isLabeled) {
+        st.labeled += 1;
+      }
+    }
+  }
+
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const noteUpdates = [];
+
+  for (let i = 1; i < albumRows.length; i++) {
+    const row = albumRows[i];
+    const aid = row[albumSheetIdCol];
+    if (!targetAlbumIds.has(aid)) continue;
+
+    const existingNote = (row[notesCol] ?? "").trim();
+    const counts = albumPhotoCounts.get(aid);
+    if (!counts || counts.total === 0) continue;
+
+    // 只有在整本相簿 100% 標記完成時才處理
+    if (counts.total === counts.labeled) {
+      const noteText = `${todayStr}：使用 ${modelName}；AI 標記已完成並寫回（${counts.labeled}/${counts.total} 張，ai_labeled）；待人工審核。`;
+
+      // 規範：notes 是空的時才能自動改；非空時不可直接覆蓋
+      if (existingNote === "") {
+        noteUpdates.push({
+          range: `${quoteSheetName("albums")}!${getColumnLetter(notesCol)}${i + 1}`,
+          values: [[noteText]],
+          albumId: aid,
+          albumTitle: row[albumHeaders.indexOf("album_title")],
+          noteText,
+        });
+      } else if (existingNote !== noteText) {
+        console.warn(`[WARNING] 相簿 ${aid} (${row[albumHeaders.indexOf("album_title")]}) 的 notes 已有內容，跳過自動覆蓋，請人工確認：\n  現有內容: "${existingNote}"\n  預計寫入: "${noteText}"`);
+      }
+    }
+  }
+
+  if (noteUpdates.length > 0) {
+    console.log(`Updating notes for ${noteUpdates.length} completed target album(s) in Google Sheets:`);
+    for (const update of noteUpdates) {
+      console.log(`  - ${update.albumId} (${update.albumTitle}): "${update.noteText}"`);
+    }
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId,
+      requestBody: {
+        data: noteUpdates.map((u) => ({ range: u.range, values: u.values })),
+        valueInputOption: "RAW",
+      },
+    });
+    console.log(`Successfully updated notes for ${noteUpdates.length} album(s) in sheet "albums".`);
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   if (options.help) {
@@ -374,6 +477,9 @@ async function main() {
   await applyCellUpdates(sheets, options.spreadsheetId, cellPlan);
   await verifyApplied(sheets, options.spreadsheetId, cellPlan);
   console.log("AI metadata updates applied and verified.");
+
+  const runDir = options.runDir || dirname(options.planPath);
+  await updateCompletedAlbumNotes(sheets, options.spreadsheetId, runDir);
 }
 
 try {
