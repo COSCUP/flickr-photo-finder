@@ -1,7 +1,7 @@
 // Opt-in semantic search lifecycle: consent dialog, downloads with progress,
 // Cache API reuse, the query worker, and the per-device enabled preference.
 // Ranking stays in semantic-search.js; this module owns network and storage.
-import { parseVectorMeta, parseVectorSet, resolveSemanticMode } from "./semantic-search.js";
+import { parseVectorMeta, parseVectorSet } from "./semantic-search.js";
 
 export const semanticStorageKey = "coscup-photo-finder-semantic";
 // Must not start with "coscup-photo-finder-": the service worker deletes those
@@ -14,21 +14,6 @@ const modelHost = "https://huggingface.co";
 // compressed from jsDelivr: about 5.7 MB on the wire, 27 MB once decoded.
 const estimatedBytes = { model: 206_000_000, runtime: 5_700_000, vectorSet: 17_715_312 };
 const embeddingCacheSize = 32;
-
-export const noWebGpuMessage = "這個瀏覽器不支援 WebGPU，無法執行文字語意搜尋；仍可使用以圖找圖。";
-
-// Text search runs only on WebGPU (the quantized model needs an operator the
-// WASM backend lacks), so check for a usable adapter before any download.
-export async function detectWebGpu(nav = globalThis.navigator) {
-  try {
-    if (!nav?.gpu || typeof nav.gpu.requestAdapter !== "function") {
-      return false;
-    }
-    return (await nav.gpu.requestAdapter()) !== null;
-  } catch {
-    return false;
-  }
-}
 
 // transformers-cache keys are full Hub URLs; entries for this model share the
 // `https://huggingface.co/<id>/` prefix whatever the file or revision.
@@ -61,7 +46,7 @@ export function writeSemanticPreference(mode, storage = globalThis.localStorage)
 // the serving host, so a slow phone can be diagnosed without remote DevTools.
 // `semantic-placement` reports which execution provider ORT assigned nodes to,
 // `semantic-dtype` tries another quantization of the same model and
-// `semantic-matmul=cpu|gpu` forces where MatMulNBits runs; all need
+// `semantic-backend=wasm|webgpu` forces the query-model backend; all need
 // `semantic-debug`.
 const debugParams = (() => {
   try {
@@ -137,13 +122,8 @@ function queryDom() {
     status: byId("semanticStatus"),
     dialog: byId("semanticDialog"),
     message: byId("semanticDialogMessage"),
-    webgpuNote: byId("semanticWebGpuNote"),
     choice: byId("semanticChoice"),
     sizeVectors: byId("semanticSizeVectors"),
-    sizeVectorsLabel: byId("semanticSizeVectorsLabel"),
-    sizeModelRow: byId("semanticSizeModelRow"),
-    sizeRuntimeRow: byId("semanticSizeRuntimeRow"),
-    sizeTotalRow: byId("semanticSizeTotalRow"),
     sizeModel: byId("semanticSizeModel"),
     sourceModel: byId("semanticSourceModel"),
     queryModelLink: byId("semanticQueryModelLink"),
@@ -183,10 +163,8 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     meta: null,
     sets: {},
     preferImage: false,
-    webgpu: null,
     hasData: false,
   };
-  let webgpuCheck = null;
   let currentRun = null;
   let worker = null;
   let workerReady = false;
@@ -196,7 +174,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
   const pendingEmbeddings = new Map();
   const embeddings = new Map();
   // runtime is a 0–1 fraction (the worker counts decoded bytes). stage becomes
-  // "initializing" when the model files are in and ORT builds the GPU session.
+  // "initializing" when the model files are in and ORT builds the session.
   const progress = { vectors: new Map(), model: new Map(), runtime: 0, stage: "", includeModel: false };
 
   // Readiness follows the last mode that finished loading, so an upgrade from
@@ -256,14 +234,6 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
 
   function vectorCacheName(set) {
     return `${vectorCachePrefix}${set.sha256}`;
-  }
-
-  function checkWebGpu() {
-    webgpuCheck ??= detectWebGpu().then((supported) => {
-      state.webgpu = supported;
-      return supported;
-    });
-    return webgpuCheck;
   }
 
   // caches.open() would create an empty cache, so look it up with has() first.
@@ -509,7 +479,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         dtype: (semanticDebug && debugParams.get("semantic-dtype")) || meta.queryModel.dtype || "q4",
         debug: semanticDebug,
         placement: semanticDebug && debugParams.has("semantic-placement"),
-        matmul: semanticDebug ? (debugParams.get("semantic-matmul") ?? "") : "",
+        backend: semanticDebug ? (debugParams.get("semantic-backend") ?? "") : "",
         dims: meta.dims,
         queryPrefix: meta.queryPrefix,
       });
@@ -526,9 +496,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
 
   // Loads every asset a mode needs. With allowNetwork false (automatic restore
   // after reload) it only succeeds when vectors come from the Cache API.
-  // `storedPreference` overrides what is saved; a WebGPU-less restore passes
-  // "full" so the degraded image mode never overwrites the user's choice.
-  async function activate(mode, { allowNetwork, readyMessage = "", storedPreference = "" }) {
+  async function activate(mode, { allowNetwork }) {
     const token = ++runToken;
     abortController?.abort();
     abortController = new AbortController();
@@ -548,9 +516,6 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       const meta = await loadMeta();
       if (setsForMode(mode, meta).length === 0) {
         throw new Error("這次部署沒有可用的照片向量");
-      }
-      if (mode === "full" && !(await checkWebGpu())) {
-        throw new Error(noWebGpuMessage);
       }
       const kinds = setsForMode(mode, meta).filter((kind) => !state.sets[kind]);
       run = { meta, kinds, includeModel: mode === "full" && !workerReady, previousSets: previous.sets };
@@ -574,10 +539,10 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         throw new CancelledError();
       }
       state.mode = mode;
-      writeSemanticPreference(storedPreference || mode);
+      writeSemanticPreference(mode);
       abortController = null;
       currentRun = null;
-      setStatus("ready", readyMessage);
+      setStatus("ready");
       refreshHasData();
       trackEvent("semantic_assets_ready", {
         download_ms: Math.round(performance.now() - startedAt),
@@ -603,7 +568,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       currentRun = null;
       // A failed run leaves nothing half-enabled: drop what it stored and fall
       // back to the mode that was active before it (usually none).
-      writeSemanticPreference(storedPreference || previous.mode);
+      writeSemanticPreference(previous.mode);
       await discardRun(run);
       if (isCancelled(error)) {
         setStatus(previous.mode ? "ready" : "idle");
@@ -754,12 +719,13 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       setProgress(dom.progressModel, dom.progressModelText, totals.modelLoaded, totals.modelTotal);
       setProgress(dom.progressRuntime, null, progress.runtime, 1);
       dom.progressRuntimeText.textContent = progress.runtime >= 1 ? "完成" : `${Math.floor(progress.runtime * 100)}%`;
-      // After the downloads finish, building the WebGPU session and compiling
-      // shaders still takes a few seconds with no byte progress to show.
+      // After the downloads finish, building the inference session (and
+      // compiling shaders on WebGPU) still takes a few seconds with no byte
+      // progress to show.
       const initializing = !workerReady && progress.stage === "initializing";
       dom.progressStage.hidden = !initializing;
       if (initializing) {
-        dom.progressStage.textContent = progress.runtime >= 1 ? "下載完成，正在初始化 GPU…" : "模型下載完成，等待執行環境…";
+        dom.progressStage.textContent = progress.runtime >= 1 ? "下載完成，正在初始化查詢模型…" : "模型下載完成，等待執行環境…";
       }
     }
     setProgress(dom.progressTotal, dom.progressTotalText, totals.loaded, totals.total);
@@ -774,13 +740,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       ? Object.values(sets).reduce((total, set) => total + set.bytes, 0)
       : estimatedBytes.vectorSet * 2;
     const imageBytes = sets?.image?.bytes ?? estimatedBytes.vectorSet;
-    // Without WebGPU only image similarity is possible, so list just its data.
-    const imageOnly = state.webgpu === false;
-    dom.sizeVectorsLabel.textContent = imageOnly ? "圖片向量" : "照片向量（文字與圖片）";
-    dom.sizeModelRow.hidden = imageOnly;
-    dom.sizeRuntimeRow.hidden = imageOnly;
-    dom.sizeTotalRow.hidden = imageOnly;
-    dom.sizeVectors.textContent = `約 ${formatMegabytes(imageOnly ? imageBytes : vectorBytes)}`;
+    dom.sizeVectors.textContent = `約 ${formatMegabytes(vectorBytes)}`;
     dom.sizeModel.textContent = `約 ${formatMegabytes(estimatedBytes.model)}`;
     dom.sizeRuntime.textContent = `約 ${formatMegabytes(estimatedBytes.runtime)}`;
     dom.sizeTotal.textContent = `約 ${formatMegabytes(vectorBytes + estimatedBytes.model + estimatedBytes.runtime)}`;
@@ -816,14 +776,14 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         return "正在從瀏覽器快取載入語意搜尋…";
       case "downloading":
         if (progress.stage === "initializing" && !workerReady && totals.loaded >= totals.total) {
-          return "語意搜尋資料下載完成，正在初始化 GPU…";
+          return "語意搜尋資料下載完成，正在初始化查詢模型…";
         }
         return `正在下載語意搜尋資料 ${percent}%`;
       case "ready":
         if (state.mode === "full") {
-          return "語意搜尋已開啟（WebGPU）。輸入描述即可查詢，查詢內容只在本機計算。";
+          return `語意搜尋已開啟（${state.device === "wasm" ? "CPU" : "WebGPU"}）。輸入描述即可查詢，查詢內容只在本機計算。`;
         }
-        return `${state.message ? `${state.message} ` : ""}以圖找圖已開啟：在照片預覽按「找相似照片」。${state.webgpu === false ? "" : "文字語意搜尋尚未下載。"}`;
+        return `${state.message ? `${state.message} ` : ""}以圖找圖已開啟：在照片預覽按「找相似照片」。文字語意搜尋尚未下載。`;
       case "needs-download":
         return "語意搜尋的資料已不在瀏覽器中，需要重新下載。";
       case "error":
@@ -858,15 +818,11 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     dom.progress.hidden = !busy;
     const fullReady = state.status === "ready" && state.mode === "full";
     const imageOnly = state.status === "ready" && state.mode === "image";
-    const noWebGpu = state.webgpu === false;
     dom.enableFull.hidden = fullReady;
-    dom.enableFull.disabled = noWebGpu;
     dom.enableImage.hidden = fullReady || imageOnly || !hasImageVectors();
     dom.enableFull.textContent = imageOnly ? "下載文字語意搜尋" : "下載並開啟語意搜尋";
-    dom.enableFull.classList.toggle("is-primary", !noWebGpu && (!state.preferImage || imageOnly));
-    dom.enableImage.classList.toggle("is-primary", noWebGpu || (state.preferImage && !imageOnly));
-    dom.webgpuNote.hidden = !noWebGpu || fullReady;
-    dom.webgpuNote.textContent = noWebGpuMessage;
+    dom.enableFull.classList.toggle("is-primary", !state.preferImage || imageOnly);
+    dom.enableImage.classList.toggle("is-primary", state.preferImage && !imageOnly);
     dom.disable.hidden = state.status !== "ready";
     dom.clear.hidden = !state.hasData;
     dom.manage.hidden = busy || (dom.disable.hidden && dom.clear.hidden);
@@ -896,25 +852,15 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       onChange();
       refreshHasData();
     }, () => {});
-    checkWebGpu().then(() => {
-      renderSizes();
-      renderDialog();
-    });
     refreshHasData();
   }
 
-  async function enable(mode) {
-    if (mode === "full" && !(await checkWebGpu())) {
-      renderDialog();
-      return;
-    }
+  function enable(mode) {
     trackEvent("enable_semantic_search", { semantic_mode: mode });
     activate(mode, { allowNetwork: true });
   }
 
-  // Automatic restore after reload never downloads. A stored "full" mode on a
-  // browser without WebGPU degrades to image similarity when its vectors are
-  // cached, otherwise the preference is dropped with an explanation.
+  // Automatic restore after reload never downloads.
   async function restore() {
     const preference = readSemanticPreference();
     if (!available || !preference) {
@@ -922,24 +868,9 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     }
     state.status = "checking";
     emit();
-    let mode = preference;
-    let readyMessage = "";
-    let storedPreference = preference;
     try {
       const meta = await loadMeta();
-      const webgpu = preference === "full" ? await checkWebGpu() : false;
-      const imageCached = Boolean(meta.sets.image) && Boolean(await cachedVector(meta.sets.image));
-      const resolved = resolveSemanticMode({ preference, webgpu, imageCached });
-      storedPreference = resolved.storedPreference;
-      if (!resolved.mode) {
-        setStatus("error", noWebGpuMessage);
-        return;
-      }
-      mode = resolved.mode;
-      if (resolved.reason === "no-webgpu") {
-        readyMessage = "這個瀏覽器不支援 WebGPU，已改為只用以圖找圖。";
-      }
-      if (!(await allAssetsCached(meta, mode))) {
+      if (!(await allAssetsCached(meta, preference))) {
         setStatus("needs-download");
         return;
       }
@@ -947,7 +878,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       setStatus("needs-download", error.message);
       return;
     }
-    await activate(mode, { allowNetwork: false, readyMessage, storedPreference });
+    await activate(preference, { allowNetwork: false });
   }
 
   if (available) {

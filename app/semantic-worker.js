@@ -1,7 +1,7 @@
 // Web Worker for opt-in semantic search. It loads only the text half of the
 // pinned EmbeddingGemma 2 ONNX model and turns query text into a normalized
 // vector. Queries never leave the browser; only model files are downloaded.
-import { onnxNodeNames, shouldRunMatMulOnCpu } from "./semantic-search.js";
+import { chooseQueryBackend, rewriteGatherBlockQuantized } from "./semantic-search.js";
 
 // Decoded size of ort-wasm-simd-threaded.asyncify.wasm for the onnxruntime-web
 // build that transformers.js 4.3.2 pins; only used to scale progress.
@@ -59,7 +59,7 @@ function progressCallback(info) {
   }
 }
 
-// Once every model file is downloaded, ORT builds the WebGPU session, which
+// Once every model file is downloaded, ORT builds the inference session, which
 // reports no byte progress; tell the page so it can show that stage.
 function modelProgressCallback() {
   const files = new Map();
@@ -163,22 +163,33 @@ function installDebugCapture() {
   }
 }
 
-// The model graph without its weights is about 0.5 MB. Reading it before the
-// session lists the MatMulNBits nodes to run on the CPU; storing it under the
-// same URL lets transformers.js reuse it instead of downloading it again.
-async function matMulNodeNames({ modelId, revision, dtype }) {
+// The WASM backend cannot run GatherBlockQuantized, so before the session is
+// created the model graph (about 0.5 MB, without weights) is rewritten into
+// standard ops and stored under its own URL, where transformers.js reads it.
+// The rewrite is idempotent, so a graph cached by an earlier visit is fine.
+async function prepareWasmGraph({ modelId, revision, dtype }) {
   const file = dtype === "fp32" ? "model.onnx" : `model_${dtype}.onnx`;
   const url = `${modelHost}/${modelId}/resolve/${encodeURIComponent(revision)}/onnx/${file}`;
-  const cache = await caches.open(runtimeCacheName).catch(() => null);
-  let response = await cache?.match(url);
+  const cache = await caches.open(runtimeCacheName);
+  let response = await cache.match(url);
   if (!response) {
     response = await fetch(url);
     if (!response.ok) {
       throw new Error(`無法讀取模型結構：HTTP ${response.status}`);
     }
-    await cache?.put(url, response.clone()).catch(() => {});
   }
-  return onnxNodeNames(await response.arrayBuffer(), "MatMulNBits");
+  const { bytes, replaced } = rewriteGatherBlockQuantized(await response.arrayBuffer());
+  if (replaced > 0 || !(await cache.match(url))) {
+    await cache.put(url, new Response(bytes, { headers: { "content-type": "application/octet-stream", "content-length": String(bytes.length) } }));
+  }
+}
+
+async function detectAdapter() {
+  try {
+    return (await navigator.gpu?.requestAdapter()) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 async function loadModel(message) {
@@ -189,26 +200,19 @@ async function loadModel(message) {
     dtype: message.dtype || "q4",
     debug: Boolean(message.debug),
     placement: Boolean(message.placement),
-    matmul: String(message.matmul ?? ""),
+    backend: String(message.backend ?? ""),
     dims: Number(message.dims) || 512,
     queryPrefix: String(message.queryPrefix ?? ""),
   };
-  if (typeof navigator === "undefined" || !navigator.gpu) {
-    throw new Error("這個瀏覽器不支援 WebGPU，無法執行文字語意搜尋");
-  }
-  let vendor = "";
-  try {
-    const adapter = await navigator.gpu.requestAdapter();
-    const info = adapter?.info;
-    vendor = info?.vendor ?? "";
-    timings.gpu = [info?.vendor, info?.architecture, info?.device].filter(Boolean).join("/");
-    if (settings.debug && adapter) {
-      timings.features = ["shader-f16", "subgroups", "timestamp-query"].filter((name) => adapter.features.has(name)).join("+") || "none";
-      timings.dtype = settings.dtype;
-      timings.isolated = String(self.crossOriginIsolated === true);
-    }
-  } catch {
-    // Adapter details are diagnostic only.
+  const adapter = await detectAdapter();
+  const info = adapter?.info;
+  const backend = chooseQueryBackend({ hasWebGpu: Boolean(adapter), vendor: info?.vendor ?? "", override: settings.backend });
+  timings.backend = backend;
+  timings.gpu = [info?.vendor, info?.architecture, info?.device].filter(Boolean).join("/") || "none";
+  if (settings.debug) {
+    timings.features = adapter ? ["shader-f16", "subgroups", "timestamp-query"].filter((name) => adapter.features.has(name)).join("+") || "none" : "none";
+    timings.dtype = settings.dtype;
+    timings.isolated = String(self.crossOriginIsolated === true);
   }
   const configPromise = fetchTextConfig(settings);
   const { AutoModel, AutoTokenizer, env } = await import(transformersUrl);
@@ -235,34 +239,28 @@ async function loadModel(message) {
     return baseFetch(url, init);
   };
 
-  const cpuMatMul = shouldRunMatMulOnCpu({ vendor, override: settings.matmul });
-  timings.matmul = cpuMatMul ? "cpu" : "gpu";
-  const sessionOptionsPromise = cpuMatMul
-    ? matMulNodeNames(settings).then((names) => ({ executionProviders: [{ name: "webgpu", forceCpuNodeNames: names }] }))
-    : Promise.resolve({});
+  const graphPromise = backend === "wasm" ? prepareWasmGraph(settings) : Promise.resolve();
 
   const tokenizerPromise = AutoTokenizer.from_pretrained(settings.modelId, {
     revision: settings.revision,
     progress_callback: progressCallback,
   }).finally(() => mark("tokenizer"));
-  const modelPromise = Promise.all([configPromise.finally(() => mark("config")), sessionOptionsPromise]).then(([config, sessionOptions]) =>
-    // WebGPU only: every quantized export uses GatherBlockQuantized, which the
-    // ORT-web WASM backend does not implement.
+  const modelPromise = Promise.all([configPromise.finally(() => mark("config")), graphPromise]).then(([config]) =>
     AutoModel.from_pretrained(settings.modelId, {
       config,
       dtype: settings.dtype,
       revision: settings.revision,
-      device: "webgpu",
+      device: backend,
       progress_callback: modelProgressCallback(),
-      session_options: { ...sessionOptions, ...(settings.placement ? { logSeverityLevel: 0, logVerbosityLevel: 1 } : {}) },
+      ...(settings.placement ? { session_options: { logSeverityLevel: 0, logVerbosityLevel: 1 } } : {}),
     }),
   ).finally(() => mark("session"));
   [tokenizer, model] = await Promise.all([tokenizerPromise, modelPromise, runtimePromise]);
-  // A first embedding compiles the GPU shaders and confirms the device can
-  // actually run the graph.
+  // A first embedding compiles the GPU shaders (on WebGPU) and confirms the
+  // backend can actually run the graph.
   await embedText("warmup");
   mark("warmup");
-  return "webgpu";
+  return backend;
 }
 
 async function embedText(text) {

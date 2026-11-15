@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  detectWebGpu,
   isModelCacheUrl,
   modelFileUrls,
   readSemanticPreference,
@@ -9,22 +8,21 @@ import {
 } from "../app/semantic-controller.js";
 import { matchesFilters } from "../app/search-sort.js";
 import {
+  chooseQueryBackend,
   eligibilityMask,
   enterSimilarState,
   exitSimilarState,
   fuseRankings,
   hasVector,
   normalizeVector,
-  onnxNodeNames,
   parseVectorMeta,
   parseVectorSet,
   rankScores,
+  rewriteGatherBlockQuantized,
   resolveResultView,
-  resolveSemanticMode,
   rowVector,
   scoreRows,
   semanticRanking,
-  shouldRunMatMulOnCpu,
   similarRanking,
   splitResultTabs,
   topRows,
@@ -277,41 +275,7 @@ describe("semantic preferences and URL state", () => {
   });
 });
 
-describe("semantic capability and similar-state transitions", () => {
-  it("detects a usable WebGPU adapter before any download", async () => {
-    assert.equal(await detectWebGpu({}), false);
-    assert.equal(await detectWebGpu(undefined), false);
-    assert.equal(await detectWebGpu({ gpu: { requestAdapter: async () => null } }), false);
-    assert.equal(await detectWebGpu({ gpu: { requestAdapter: async () => ({}) } }), true);
-    assert.equal(
-      await detectWebGpu({
-        gpu: {
-          requestAdapter: async () => {
-            throw new Error("blocked");
-          },
-        },
-      }),
-      false,
-    );
-  });
-
-  it("degrades a stored full preference in memory only when WebGPU is missing", () => {
-    assert.deepEqual(resolveSemanticMode({ preference: "full", webgpu: true }), { mode: "full", reason: "", storedPreference: "full" });
-    // Degraded modes keep "full" stored so a WebGPU-capable session restores it.
-    assert.deepEqual(resolveSemanticMode({ preference: "full", webgpu: false, imageCached: true }), {
-      mode: "image",
-      reason: "no-webgpu",
-      storedPreference: "full",
-    });
-    assert.deepEqual(resolveSemanticMode({ preference: "full", webgpu: false, imageCached: false }), {
-      mode: "",
-      reason: "no-webgpu",
-      storedPreference: "full",
-    });
-    assert.deepEqual(resolveSemanticMode({ preference: "image", webgpu: false }), { mode: "image", reason: "", storedPreference: "image" });
-    assert.deepEqual(resolveSemanticMode({ preference: "" }), { mode: "", reason: "", storedPreference: "" });
-  });
-
+describe("semantic cache and similar-state transitions", () => {
   it("matches only this model's transformers-cache entries", () => {
     const id = "onnx-community/embeddinggemma-2-ONNX";
     assert.equal(isModelCacheUrl(`https://huggingface.co/${id}/resolve/abc/onnx/model_q4.onnx`, id), true);
@@ -341,7 +305,7 @@ describe("semantic capability and similar-state transitions", () => {
   });
 });
 
-describe("query model placement", () => {
+describe("query model backend", () => {
   const varint = (value) => {
     const out = [];
     while (value >= 0x80) {
@@ -353,22 +317,89 @@ describe("query model placement", () => {
   };
   const bytesField = (field, payload) => [...varint(field * 8 + 2), ...varint(payload.length), ...payload];
   const text = (value) => [...new TextEncoder().encode(value)];
-  const node = (name, opType) => bytesField(1, [...bytesField(3, text(name)), ...bytesField(4, text(opType)), ...bytesField(1, text("input"))]);
+  const intAttr = (name, value) => bytesField(5, [...bytesField(1, text(name)), ...varint(3 * 8), ...varint(value), ...varint(20 * 8), 2]);
+  const initializer = (name, dims, type) => bytesField(5, [...dims.flatMap((d) => [...varint(1 * 8), ...varint(d)]), ...varint(2 * 8), type, ...bytesField(8, text(name))]);
+  const gbqModel = (bits = 4) => {
+    const gbq = bytesField(1, [
+      ...["table", "input_ids", "scales", "zero_points"].flatMap((input) => bytesField(1, text(input))),
+      ...bytesField(2, text("embeds")),
+      ...bytesField(3, text("/embed/Gather_Quant")),
+      ...bytesField(4, text("GatherBlockQuantized")),
+      ...intAttr("bits", bits),
+      ...intAttr("block_size", 4),
+      ...intAttr("gather_axis", 0),
+      ...intAttr("quantize_axis", 1),
+      ...bytesField(7, text("com.microsoft")),
+    ]);
+    const relu = bytesField(1, [...bytesField(1, text("embeds")), ...bytesField(2, text("out")), ...bytesField(3, text("/relu")), ...bytesField(4, text("Relu"))]);
+    const graph = [...gbq, ...relu, ...bytesField(2, text("main")), ...initializer("table", [8, 2], 2), ...initializer("scales", [8, 1], 1), ...initializer("zero_points", [8, 1], 2)];
+    return Uint8Array.from([...varint(1 * 8), 9, ...bytesField(7, graph), ...bytesField(8, text("opset"))]);
+  };
+  // Reads node op types and outputs back out of the rewritten model.
+  const nodes = (bytes) => {
+    const read = (view, position) => {
+      let value = 0;
+      let shift = 0;
+      for (;;) {
+        const byte = view[position++];
+        value += (byte & 0x7f) * 2 ** shift;
+        if (byte < 0x80) return [value, position];
+        shift += 7;
+      }
+    };
+    const fields = (view) => {
+      const out = [];
+      let position = 0;
+      while (position < view.length) {
+        let key;
+        [key, position] = read(view, position);
+        if (key % 8 === 0) {
+          [, position] = read(view, position);
+          continue;
+        }
+        let length;
+        [length, position] = read(view, position);
+        out.push([Math.floor(key / 8), view.subarray(position, position + length)]);
+        position += length;
+      }
+      return out;
+    };
+    const decoder = new TextDecoder();
+    const graph = fields(bytes).find(([field]) => field === 7)[1];
+    return fields(graph).filter(([field]) => field === 1).map(([, node]) => {
+      const parts = fields(node);
+      return { op: decoder.decode(parts.find(([f]) => f === 4)[1]), outputs: parts.filter(([f]) => f === 2).map(([, v]) => decoder.decode(v)) };
+    });
+  };
 
-  it("lists node names of one op type from an ONNX model", () => {
-    const graph = [...node("/a/MatMul_Quant", "MatMulNBits"), ...node("/a/Gelu", "Gelu"), ...bytesField(2, text("main")), ...node("/b/MatMul_Quant", "MatMulNBits")];
-    const model = Uint8Array.from([...varint(1 * 8), 9, ...bytesField(7, graph), ...bytesField(8, text("opset"))]);
-    assert.deepEqual(onnxNodeNames(model, "MatMulNBits"), ["/a/MatMul_Quant", "/b/MatMul_Quant"]);
-    assert.deepEqual(onnxNodeNames(model.buffer, "Gelu"), ["/a/Gelu"]);
-    assert.deepEqual(onnxNodeNames(model, "Softmax"), []);
-    assert.throws(() => onnxNodeNames(Uint8Array.from([0x80]), "MatMulNBits"), /格式不正確/);
+  it("prefers WebGPU except without an adapter or on slow GPU vendors", () => {
+    assert.equal(chooseQueryBackend({ hasWebGpu: true, vendor: "apple" }), "webgpu");
+    assert.equal(chooseQueryBackend({ hasWebGpu: true, vendor: "ARM" }), "wasm");
+    assert.equal(chooseQueryBackend({ hasWebGpu: false }), "wasm");
+    assert.equal(chooseQueryBackend({ hasWebGpu: true, vendor: "arm", override: "webgpu" }), "webgpu");
+    assert.equal(chooseQueryBackend({ hasWebGpu: false, override: "webgpu" }), "wasm");
+    assert.equal(chooseQueryBackend({ hasWebGpu: true, vendor: "apple", override: "wasm" }), "wasm");
   });
 
-  it("runs MatMulNBits on the CPU only for slow GPU vendors unless overridden", () => {
-    assert.equal(shouldRunMatMulOnCpu({ vendor: "arm" }), true);
-    assert.equal(shouldRunMatMulOnCpu({ vendor: "apple" }), false);
-    assert.equal(shouldRunMatMulOnCpu({ vendor: "" }), false);
-    assert.equal(shouldRunMatMulOnCpu({ vendor: "arm", override: "gpu" }), false);
-    assert.equal(shouldRunMatMulOnCpu({ vendor: "apple", override: "cpu" }), true);
+  it("rewrites 4-bit GatherBlockQuantized into standard ops and keeps its output", () => {
+    const { bytes, replaced } = rewriteGatherBlockQuantized(gbqModel());
+    assert.equal(replaced, 1);
+    const ops = nodes(bytes);
+    assert.equal(ops.some((node) => node.op === "GatherBlockQuantized"), false);
+    assert.deepEqual(ops.at(-1), { op: "Relu", outputs: ["out"] });
+    assert.deepEqual(ops.at(-2), { op: "Reshape", outputs: ["embeds"] });
+    assert.ok(ops.every((node) => ["Constant", "Gather", "Cast", "Div", "Mul", "Sub", "Unsqueeze", "Concat", "Reshape", "Relu"].includes(node.op)));
+    // Rewriting again is a no-op, so a cached rewritten graph stays valid.
+    const again = rewriteGatherBlockQuantized(bytes.buffer);
+    assert.equal(again.replaced, 0);
+    assert.deepEqual(again.bytes, bytes);
+  });
+
+  it("leaves unsupported layouts and malformed input alone", () => {
+    const model = gbqModel(8);
+    const { bytes, replaced } = rewriteGatherBlockQuantized(model);
+    assert.equal(replaced, 0);
+    assert.deepEqual(bytes, model);
+    assert.throws(() => rewriteGatherBlockQuantized(Uint8Array.from([0x80])), /格式不正確/);
   });
 });

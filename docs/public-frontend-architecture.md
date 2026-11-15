@@ -132,7 +132,7 @@ GitHub Pages Finder 可以註冊 service worker，讓已開啟過的公開搜尋
 
 ### 瀏覽器需求
 
-文字語意搜尋只支援 WebGPU。EmbeddingGemma 2 的 q4、q4f16、q8 模型都使用 ORT-web 的 WASM 後端沒有實作的 `GatherBlockQuantized` 運算子，而可在 WASM 執行的 fp16（約 542 MB）與 fp32（約 1 GB）不適合給瀏覽器下載，所以沒有 WASM 後備路徑。不支援 WebGPU 的瀏覽器在對話框中停用文字語意搜尋，只提供以圖找圖（只用圖片向量，不需要模型）。
+查詢模型優先用 WebGPU 執行；沒有可用的 WebGPU adapter，或 GPU 廠商是 `arm`（Mali）時，改用 ORT-web 的 WASM 後端在 CPU 執行。EmbeddingGemma 2 的量化模型用 `GatherBlockQuantized` 查詢詞嵌入，WASM 後端沒有這個運算子，所以 worker 在建立 session 前，把約 0.5 MB 的模型結構裡這個節點改寫成 `Gather`、`Cast`、`Div`、`Mul`、`Sub`、`Concat`、`Reshape` 等標準運算子，再存回 `transformers-cache`；權重檔不變，與 ORT 原本的運算子比對結果完全相同（cosine 1.000000）。
 
 ### 快取策略
 

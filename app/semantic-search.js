@@ -1,6 +1,7 @@
-// Pure ranking helpers for opt-in semantic search and image similarity.
+// Pure helpers for opt-in semantic search: ranking and image similarity, plus
+// the query-model backend choice and ONNX graph rewrite used by the worker.
 // This module must not touch the DOM, network, or storage; callers pass parsed
-// vector sets, query vectors, and eligibility masks explicitly.
+// vector sets, query vectors, model bytes and eligibility masks explicitly.
 
 export const vectorFormatVersion = "2026-11-embeddings-v1";
 export const vectorSetKinds = ["text", "image"];
@@ -316,25 +317,6 @@ export function exitSimilarState(current) {
   return { search: current.similarReturn.search, view: current.similarReturn.view, similar: "", similarReturn: null };
 }
 
-// Text queries need WebGPU: every quantized EmbeddingGemma 2 export uses
-// GatherBlockQuantized, which the ORT-web WASM backend does not implement.
-// Image similarity needs only the image vectors. Returns the mode a stored
-// preference can actually run in on this device. A degraded mode is
-// in-memory only: `storedPreference` keeps "full" so the same profile restores
-// full search once WebGPU is available again.
-export function resolveSemanticMode({ preference = "", webgpu = false, imageCached = false } = {}) {
-  if (preference === "full") {
-    if (webgpu) {
-      return { mode: "full", reason: "", storedPreference: "full" };
-    }
-    return { mode: imageCached ? "image" : "", reason: "no-webgpu", storedPreference: "full" };
-  }
-  if (preference === "image") {
-    return { mode: "image", reason: "", storedPreference: "image" };
-  }
-  return { mode: "", reason: "", storedPreference: "" };
-}
-
 export function photosForRows(photos, rows) {
   return rows.map((row) => photos[row]).filter(Boolean);
 }
@@ -346,78 +328,230 @@ export function splitResultTabs({ photos, keywordResults, semanticRows }) {
   };
 }
 
-// On these WebGPU vendors the q4 MatMulNBits kernels are far slower than the
-// WASM CPU kernels: on a Pixel 8 Pro (Mali-G715) a query took about 10 s on
-// the GPU and about 5 s with MatMulNBits on the CPU, while every other node
-// together took about 0.13 s on the GPU. `override` ("cpu" or "gpu") is a
-// debug switch.
-export const cpuMatMulGpuVendors = ["arm"];
+// Where the query model runs. WebGPU is fastest where it works well (Apple
+// GPUs: about 25 ms per query). Without a WebGPU adapter, and on GPUs whose
+// WebGPU matrix multiplication is slow, the WASM CPU backend is used: on a
+// Pixel 8 Pro (Mali, vendor "arm") a query took about 10 s on WebGPU and
+// under 1 s on WASM. `override` ("webgpu" or "wasm") is a debug switch.
+export const wasmPreferredGpuVendors = ["arm"];
 
-export function shouldRunMatMulOnCpu({ vendor = "", override = "" } = {}) {
-  if (override === "cpu" || override === "gpu") {
-    return override === "cpu";
+export function chooseQueryBackend({ hasWebGpu = false, vendor = "", override = "" } = {}) {
+  if (override === "wasm" || (override === "webgpu" && hasWebGpu)) {
+    return override;
   }
-  return cpuMatMulGpuVendors.includes(String(vendor).toLowerCase());
+  if (!hasWebGpu || wasmPreferredGpuVendors.includes(String(vendor).toLowerCase())) {
+    return "wasm";
+  }
+  return "webgpu";
 }
 
-// Names of the nodes with `opType` in an ONNX ModelProto. Only
-// ModelProto.graph (field 7) -> GraphProto.node (field 1) -> NodeProto.name
-// (field 3) / op_type (field 4) are decoded; everything else is skipped.
-export function onnxNodeNames(buffer, opType) {
-  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
-  const decoder = new TextDecoder();
-  const readVarint = (view, position) => {
+// Minimal protobuf helpers for ONNX ModelProto bytes.
+function readVarint(view, position) {
+  let value = 0;
+  let shift = 0;
+  for (;;) {
+    if (position >= view.length) {
+      throw new Error("ONNX 模型格式不正確");
+    }
+    const byte = view[position++];
+    value += (byte & 0x7f) * 2 ** shift;
+    if (byte < 0x80) {
+      return [value, position];
+    }
+    shift += 7;
+  }
+}
+
+function writeVarint(value) {
+  const out = [];
+  if (value < 0) {
+    let big = BigInt.asUintN(64, BigInt(value));
+    while (big >= 0x80n) {
+      out.push(Number(big & 0x7fn) | 0x80);
+      big >>= 7n;
+    }
+    out.push(Number(big));
+    return out;
+  }
+  let rest = value;
+  while (rest >= 0x80) {
+    out.push((rest % 128) | 0x80);
+    rest = Math.floor(rest / 128);
+  }
+  out.push(rest);
+  return out;
+}
+
+function protoFields(view) {
+  const list = [];
+  let position = 0;
+  while (position < view.length) {
+    const start = position;
+    let key;
+    [key, position] = readVarint(view, position);
+    const field = Math.floor(key / 8);
+    const wire = key % 8;
+    let payloadStart = position;
     let value = 0;
-    let shift = 0;
-    for (;;) {
-      if (position >= view.length) {
-        throw new Error("ONNX 模型格式不正確");
-      }
-      const byte = view[position++];
-      value += (byte & 0x7f) * 2 ** shift;
-      if (byte < 0x80) {
-        return [value, position];
-      }
-      shift += 7;
+    if (wire === 0) {
+      [value, position] = readVarint(view, position);
+    } else if (wire === 1) {
+      position += 8;
+    } else if (wire === 5) {
+      position += 4;
+    } else if (wire === 2) {
+      let length;
+      [length, position] = readVarint(view, position);
+      payloadStart = position;
+      position += length;
+    } else {
+      throw new Error("ONNX 模型格式不正確");
     }
-  };
-  const lengthDelimited = (view, wanted) => {
-    const found = [];
-    let position = 0;
-    while (position < view.length) {
-      let key;
-      [key, position] = readVarint(view, position);
-      const field = Math.floor(key / 8);
-      const wire = key % 8;
-      if (wire === 0) {
-        [, position] = readVarint(view, position);
-      } else if (wire === 1) {
-        position += 8;
-      } else if (wire === 5) {
-        position += 4;
-      } else if (wire === 2) {
-        let length;
-        [length, position] = readVarint(view, position);
-        if (field === wanted || wanted === undefined) {
-          found.push([field, view.subarray(position, position + length)]);
-        }
-        position += length;
-      } else {
-        throw new Error("ONNX 模型格式不正確");
-      }
+    if (position > view.length) {
+      throw new Error("ONNX 模型格式不正確");
     }
-    return found;
-  };
-  const names = [];
-  for (const [, graph] of lengthDelimited(bytes, 7)) {
-    for (const [, node] of lengthDelimited(graph, 1)) {
-      const parts = lengthDelimited(node);
-      const type = parts.find(([field]) => field === 4);
-      const name = parts.find(([field]) => field === 3);
-      if (type && name && decoder.decode(type[1]) === opType) {
-        names.push(decoder.decode(name[1]));
+    list.push({ field, wire, value, raw: view.subarray(start, position), payload: view.subarray(payloadStart, position) });
+  }
+  return list;
+}
+
+function concatBytes(parts) {
+  const out = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+  let offset = 0;
+  for (const part of parts) {
+    out.set(part, offset);
+    offset += part.length;
+  }
+  return out;
+}
+
+const protoText = new TextEncoder();
+const protoDecoder = new TextDecoder();
+const bytesField = (field, payload) => concatBytes([Uint8Array.from([...writeVarint(field * 8 + 2), ...writeVarint(payload.length)]), payload]);
+const varintField = (field, value) => Uint8Array.from([...writeVarint(field * 8), ...writeVarint(value)]);
+const textField = (field, value) => bytesField(field, protoText.encode(value));
+
+function intAttribute(name, value) {
+  return concatBytes([textField(1, name), varintField(3, value), varintField(20, 2)]);
+}
+
+function intsAttribute(name, values) {
+  return concatBytes([textField(1, name), ...values.map((value) => varintField(8, value)), varintField(20, 7)]);
+}
+
+function onnxNode(opType, inputs, outputs, name, attributes = []) {
+  return concatBytes([
+    ...inputs.map((input) => textField(1, input)),
+    ...outputs.map((output) => textField(2, output)),
+    textField(3, name),
+    textField(4, opType),
+    ...attributes.map((attribute) => bytesField(5, attribute)),
+  ]);
+}
+
+function tensorDims(tensor) {
+  const dims = [];
+  for (const part of protoFields(tensor).filter((item) => item.field === 1)) {
+    if (part.wire === 0) {
+      dims.push(part.value);
+    } else {
+      let position = 0;
+      while (position < part.payload.length) {
+        let value;
+        [value, position] = readVarint(part.payload, position);
+        dims.push(value);
       }
     }
   }
-  return names;
+  return dims;
+}
+
+// Standard-op equivalent of a 4-bit GatherBlockQuantized with gather_axis 0
+// and quantize_axis 1: gather the packed rows, split each byte into its low
+// and high nibble with integer Div/Mul/Sub, subtract the zero points and
+// multiply by the per-block scales.
+function gatherBlockQuantizedNodes({ data, ids, scales, zeroPoints, output, prefix, blocks, blockSize }) {
+  const name = (suffix) => `${prefix}/${suffix}`;
+  const nodes = [];
+  const add = (opType, inputs, outputs, attributes) => nodes.push(onnxNode(opType, inputs, outputs, name(`${opType}_${nodes.length}`), attributes));
+  add("Constant", [], [name("c16")], [intAttribute("value_int", 16)]);
+  add("Constant", [], [name("last_axis")], [intsAttribute("value_ints", [-1])]);
+  add("Constant", [], [name("value_shape")], [intsAttribute("value_ints", [0, 0, blocks, blockSize])]);
+  add("Constant", [], [name("zero_shape")], [intsAttribute("value_ints", [0, 0, blocks, 1])]);
+  add("Constant", [], [name("output_shape")], [intsAttribute("value_ints", [0, 0, blocks * blockSize])]);
+  const unpack = (source, tag) => {
+    add("Gather", [source, ids], [name(`${tag}_rows`)], [intAttribute("axis", 0)]);
+    add("Cast", [name(`${tag}_rows`)], [name(`${tag}_int`)], [intAttribute("to", 7)]);
+    add("Div", [name(`${tag}_int`), name("c16")], [name(`${tag}_high`)]);
+    add("Mul", [name(`${tag}_high`), name("c16")], [name(`${tag}_high16`)]);
+    add("Sub", [name(`${tag}_int`), name(`${tag}_high16`)], [name(`${tag}_low`)]);
+    add("Unsqueeze", [name(`${tag}_low`), name("last_axis")], [name(`${tag}_low1`)]);
+    add("Unsqueeze", [name(`${tag}_high`), name("last_axis")], [name(`${tag}_high1`)]);
+    add("Concat", [name(`${tag}_low1`), name(`${tag}_high1`)], [name(`${tag}_pairs`)], [intAttribute("axis", -1)]);
+    return name(`${tag}_pairs`);
+  };
+  add("Reshape", [unpack(data, "q"), name("value_shape")], [name("q_blocks")]);
+  add("Cast", [name("q_blocks")], [name("q_float")], [intAttribute("to", 1)]);
+  add("Reshape", [unpack(zeroPoints, "zp"), name("zero_shape")], [name("zp_blocks")]);
+  add("Cast", [name("zp_blocks")], [name("zp_float")], [intAttribute("to", 1)]);
+  add("Gather", [scales, ids], [name("scale_rows")], [intAttribute("axis", 0)]);
+  add("Unsqueeze", [name("scale_rows"), name("last_axis")], [name("scale_blocks")]);
+  add("Sub", [name("q_float"), name("zp_float")], [name("centered")]);
+  add("Mul", [name("centered"), name("scale_blocks")], [name("scaled")]);
+  add("Reshape", [name("scaled"), name("output_shape")], [output]);
+  return nodes;
+}
+
+// ORT-web's WASM backend has no GatherBlockQuantized kernel, which every
+// quantized EmbeddingGemma 2 export uses for its token embeddings. This
+// rewrites such nodes into standard ops (identical results; checked against
+// ORT's own kernel at cosine 1.000000) and copies everything else byte for
+// byte. Only ModelProto.graph -> GraphProto.node is re-encoded. Nodes with
+// another layout are left unchanged; `replaced` counts the rewritten ones.
+export function rewriteGatherBlockQuantized(buffer) {
+  const model = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  let replaced = 0;
+  const rewriteGraph = (graph) => {
+    const parts = protoFields(graph);
+    const initializerDims = new Map();
+    for (const part of parts.filter((item) => item.field === 5)) {
+      const nameField = protoFields(part.payload).find((item) => item.field === 8);
+      if (nameField) {
+        initializerDims.set(protoDecoder.decode(nameField.payload), tensorDims(part.payload));
+      }
+    }
+    const out = [];
+    for (const part of parts) {
+      const node = part.field === 1 ? protoFields(part.payload) : null;
+      const opType = node?.find((item) => item.field === 4);
+      if (!opType || protoDecoder.decode(opType.payload) !== "GatherBlockQuantized") {
+        out.push(part.raw);
+        continue;
+      }
+      const inputs = node.filter((item) => item.field === 1).map((item) => protoDecoder.decode(item.payload));
+      const outputs = node.filter((item) => item.field === 2).map((item) => protoDecoder.decode(item.payload));
+      const attributes = Object.fromEntries(node.filter((item) => item.field === 5).map((item) => {
+        const fields = protoFields(item.payload);
+        return [protoDecoder.decode(fields.find((f) => f.field === 1).payload), fields.find((f) => f.field === 3)?.value];
+      }));
+      const nodeName = protoDecoder.decode(node.find((item) => item.field === 3)?.payload ?? new Uint8Array());
+      const [data, ids, scales, zeroPoints] = inputs;
+      const dataDims = initializerDims.get(data);
+      const scaleDims = initializerDims.get(scales);
+      const blockSize = attributes.block_size;
+      const supported = attributes.bits === 4 && (attributes.gather_axis ?? 0) === 0 && attributes.quantize_axis === 1
+        && Boolean(zeroPoints) && dataDims?.length === 2 && scaleDims?.length === 2 && dataDims[1] * 2 === scaleDims[1] * blockSize;
+      if (!supported) {
+        out.push(part.raw);
+        continue;
+      }
+      replaced += 1;
+      for (const replacement of gatherBlockQuantizedNodes({ data, ids, scales, zeroPoints, output: outputs[0], prefix: `${nodeName}_std`, blocks: scaleDims[1], blockSize })) {
+        out.push(bytesField(1, replacement));
+      }
+    }
+    return concatBytes(out);
+  };
+  const out = protoFields(model).map((part) => (part.field === 7 && part.wire === 2 ? bytesField(7, rewriteGraph(part.payload)) : part.raw));
+  return { bytes: concatBytes(out), replaced };
 }

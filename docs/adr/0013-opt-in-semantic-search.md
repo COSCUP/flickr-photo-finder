@@ -31,8 +31,7 @@ PoC 評測的方式如下：
   - transformers.js 與 ONNX Runtime WASM 來自 jsDelivr，固定版本 4.3.2；jsDelivr 壓縮傳輸約 6 MB，解壓後約 27 MB。WASM 與模型同時下載並顯示進度，不等模型下載完才開始。
 - **揭露使用的模型**：對話框列出照片向量與查詢使用的模型、量化方式、固定 revision 與授權（Google EmbeddingGemma 2，Apache 2.0），內容取自部署的 `vectors/meta.json`。
 - **查詢不離開瀏覽器**：查詢文字只在瀏覽器內由 Web Worker 轉成向量，不送往任何第三方，也不送進 GA4。但模型與函式庫的下載請求會連到 huggingface.co 與 jsDelivr，這是使用者開啟前必須被告知的事實。
-- **文字語意搜尋只支援 WebGPU**：EmbeddingGemma 2 的 q4、q4f16、q8 模型都使用 `GatherBlockQuantized` 運算子，ORT-web 的 WASM 後端沒有這個實作；能在 WASM 執行的 fp16（約 542 MB）與 fp32（約 1 GB）太大，不適合讓瀏覽器下載。因此不支援 WebGPU 的瀏覽器，對話框會停用文字語意搜尋，只提供以圖找圖（以圖找圖只用圖片向量，不需要模型）。
-- **Mali GPU 的矩陣乘法改在 CPU 執行**：在 Mali GPU（WebGPU 廠商 `arm`）上，q4 矩陣乘法用 WebGPU 執行時每次查詢約 10 秒，改由 WASM 在 CPU 執行約 4 秒，其他節點仍在 WebGPU 上。量測方法與數字見 `docs/semantic-search-maintenance.md`。
+- **查詢模型的執行後端：WebGPU 優先，其餘用 WASM**：沒有可用的 WebGPU adapter，或 GPU 廠商是 `arm`（Mali）時，改用 ORT-web 的 WASM 後端在 CPU 執行。量化模型用到 WASM 後端沒有實作的 `GatherBlockQuantized`，worker 會在建立 session 前，把模型結構（約 0.5 MB）裡這個節點改寫成標準運算子，權重檔不變，結果與原運算子完全相同。實測每次查詢：Mac（Apple GPU、WebGPU）約 25 ms；Pixel 8 Pro（Mali）用 WebGPU 約 10 秒、用 WASM 不到 1 秒。
 - **向量來源與格式**：由維護者在本機用 EmbeddingGemma 2 8-bit 產生文字向量與圖片向量，截斷到 512 維後以 int8 逐列量化。文字向量的輸入是相簿標題加 AI 視覺描述與場景、氛圍、用途標籤；圖片向量只使用 Flickr 縮圖。
 - **向量以不可變分段 commit 進 repo**：放在 `data/embeddings/`，只增量加入差異；同一張照片後面的分段覆蓋前面的。Pages build 讀取分段，依 `photos-index.json` 的列順序輸出成瀏覽器可直接使用的二進位檔。
 - **結果分頁**：開啟語意搜尋且有查詢時，結果分成「語意相近前 N 張」與「關鍵字命中」兩個分頁。關鍵字分頁完全維持原本行為；語意分頁套用其他篩選，但忽略排序選單。沒有向量的照片只會出現在關鍵字分頁。
@@ -70,7 +69,7 @@ PoC 評測的方式如下：
 
 - 第一次完整開啟約下載 250 MB，行動網路使用者需要自行判斷。
 - 新增兩個第三方下載依賴（huggingface.co、jsDelivr）。它們不可用時語意搜尋就無法開啟，但關鍵字搜尋不受影響。版本與 revision 固定，避免上游內容在使用者不知情下改變。
-- 文字語意搜尋需要支援 WebGPU 的瀏覽器；不支援的環境只能使用以圖找圖與關鍵字搜尋，沒有 WASM 後備路徑。
+- 不支援 WebGPU 或使用 Mali GPU 的環境以單執行緒 WASM 執行查詢模型，比 WebGPU 慢；GitHub Pages 無法設定跨來源隔離所需的標頭，所以無法使用多執行緒。
 - 維護者需要一台能跑 EmbeddingGemma 2 的 Apple Silicon Mac；沒有 GPU 類加速時補算會很慢。
 - 新照片在維護者補算向量之前沒有向量，只能被關鍵字搜尋找到。
 - repo 會累積二進位分段檔，需要定期 compact 控制體積。
@@ -96,7 +95,7 @@ PoC 評測的方式如下：
 出現以下情況時重新評估本決策：
 
 - 有更小、品質相當的瀏覽器端文字模型，使首次下載量明顯下降。
-- ORT-web 的 WASM 後端支援 `GatherBlockQuantized`，或有自製、以標準運算子取代該節點且體積合理的模型檔時，評估讓不支援 WebGPU 的瀏覽器也能使用文字語意搜尋。
+- ORT-web 的 WASM 後端支援 `GatherBlockQuantized` 時，移除模型結構的改寫；其他 GPU 廠商在 WebGPU 上明顯比 WASM 慢時，加入 `wasmPreferredGpuVendors`。
 - huggingface.co 或 jsDelivr 的可用性、條款或固定版本策略改變。
 - 照片數量成長到向量檔案大小或瀏覽器記憶體成為瓶頸。
 - GA4 或使用者回饋顯示開啟率過低，或下載量造成實際困擾。
