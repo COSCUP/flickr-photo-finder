@@ -69,7 +69,7 @@ PoC 評測的方式如下：
 
 - 第一次完整開啟約下載 213 MB，行動網路使用者需要自行判斷。
 - 新增兩個第三方下載依賴（huggingface.co、jsDelivr）。它們不可用時語意搜尋就無法開啟，但關鍵字搜尋不受影響。版本與 revision 固定，避免上游內容在使用者不知情下改變。
-- 不支援 WebGPU 或使用 Mali GPU 的環境以單執行緒 WASM 執行查詢模型，比 WebGPU 慢；GitHub Pages 無法設定跨來源隔離所需的標頭，所以無法使用多執行緒。
+- 不支援 WebGPU 或使用 Mali GPU 的環境以 WASM 執行查詢模型，比 WebGPU 慢。GitHub Pages 無法設定跨來源隔離所需的標頭，改由 service worker 替頁面與 worker 腳本加上 `Cross-Origin-Opener-Policy: same-origin` 與 `Cross-Origin-Embedder-Policy: credentialless`，WASM 因此可用 4 條執行緒（Pixel 8 Pro 每次查詢約 735 → 387 ms）。第一次造訪、service worker 尚未接管時，以及不支援 `credentialless` 的 Safari，仍是單執行緒。之後若要嵌入跨來源 iframe，需要加上 `credentialless` 屬性。
 - 維護者需要一台能跑 EmbeddingGemma 2 的 Apple Silicon Mac；沒有 GPU 類加速時補算會很慢。
 - 新照片在維護者補算向量之前沒有向量，只能被關鍵字搜尋找到。
 - repo 會累積二進位分段檔，需要定期 compact 控制體積。

@@ -136,6 +136,7 @@ GitHub Pages Finder 可以註冊 service worker，讓已開啟過的公開搜尋
 
 ### 快取策略
 
+- service worker 替導覽回應與 worker 腳本加上 COOP `same-origin` 與 COEP `credentialless` 標頭，讓查詢模型的 WASM 能使用多執行緒；Flickr 圖片沒有 CORP 標頭，所以用 `credentialless`。
 - service worker 對 `data/finder-data/vectors/` 完全不處理，也不放進 precache，避免快取優先策略在背景重複下載數十 MB。
 - 向量由前端自己的 Cache API 管理，快取名稱為 `photo-finder-semantic-vectors-<sha256>`，內容沒變就能跨部署沿用。名稱刻意不用 `coscup-photo-finder-` 開頭，因為 service worker 在 activate 時會刪除該前綴下不屬於本次部署的快取。
 - 模型與 WASM 由 transformers.js 寫入 `transformers-cache`。

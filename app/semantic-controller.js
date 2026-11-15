@@ -507,6 +507,7 @@ export function createSemanticController({ metaUrl = "", photoIds = [], trackEve
         debug: semanticDebug,
         placement: semanticDebug && debugParams.has("semantic-placement"),
         backend: semanticDebug ? (debugParams.get("semantic-backend") ?? "") : "",
+        threads: semanticDebug ? Number(debugParams.get("semantic-threads")) || 0 : 0,
         dims: meta.dims,
         queryPrefix: meta.queryPrefix,
       });

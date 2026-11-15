@@ -368,6 +368,11 @@ async function main() {
   if (["./appearance.js", "./assets/brand-logo.svg", "./assets/brand-logo-white.svg"].some((url) => !serviceWorker.includes(JSON.stringify(url)))) {
     throw new Error("service-worker.js must precache appearance and both brand variants");
   }
+  // Multi-threaded WASM for the query model needs both the page and the
+  // semantic worker script served with these headers.
+  if (!['"Cross-Origin-Embedder-Policy": "credentialless"', '"Cross-Origin-Opener-Policy": "same-origin"', '["document", "worker"]'].every((text) => serviceWorker.includes(text))) {
+    throw new Error("service-worker.js must add cross-origin isolation headers to pages and worker scripts");
+  }
   const requiredMetadata = [
     'name="description"',
     'rel="canonical"',

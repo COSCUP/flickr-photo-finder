@@ -110,6 +110,7 @@ pnpm finder:check
 | `semantic-debug` | 開啟除錯。計時欄位：`import`、`config`、`runtime`、`tokenizer`、`modelFiles`（模型檔下載或從快取讀完）、`session`（推論 session 建好）、`warmup`（第一次推論完成），另附 `backend`（`webgpu` 或 `wasm`）、GPU 型號與支援的功能。 |
 | `semantic-placement` | 搭配 `semantic-debug`，回報 ONNX Runtime 把哪些節點分配到 CPU。 |
 | `semantic-dtype=q4f16` | 搭配 `semantic-debug`，改用同一個模型的其他量化版本做比較。 |
+| `semantic-threads=N` | 搭配 `semantic-debug`，在跨來源隔離時指定 WASM 執行緒數，用來比較不同執行緒數的速度。除錯欄位 `isolated`、`numThreads`、`cores` 顯示實際狀態。 |
 | `semantic-backend=wasm` 或 `webgpu` | 搭配 `semantic-debug`，強制查詢模型使用 WASM 或 WebGPU，覆蓋自動判斷；可用來在有 WebGPU 的電腦上模擬不支援 WebGPU 的瀏覽器。 |
 
 手機上要測文字語意搜尋，需要 HTTPS 或 localhost，否則瀏覽器不提供 WebGPU 與 Cache API。
@@ -120,7 +121,9 @@ pnpm finder:check
 
 在 Pixel 8 Pro（Mali-G715）上，查詢模型用 WebGPU 執行時，一次查詢約 10 秒，其中 98% 以上都花在 146 個 q4 `MatMulNBits` 節點；模型其餘節點在 GPU 上合計約 0.13 秒。改成 DP4A kernel 或 q4f16 都沒有改善，GPU 在查詢期間維持在最高頻率附近，簡單的矩陣乘法測試也只有約 55 GFLOPS；只把 `MatMulNBits` 交給 CPU 也還要約 4 秒，因為每個節點都要在 GPU 與 CPU 之間搬資料。整個模型改用 WASM 執行後，每次查詢 0.7 到 0.9 秒、建立 session 約 2.3 秒、warmup 約 1.1 秒，所以 GPU 廠商是 `arm` 時直接使用 WASM。
 
-頁面若能啟用跨來源隔離，WASM 可以使用多執行緒；但 GitHub Pages 無法設定 COOP/COEP 標頭，需要由 service worker 加上，影響整個網站，目前沒有採用。在 Pixel 8 Pro 上執行緒超過 4 條反而變慢，因為會排到效能較低的核心。
+WASM 的多執行緒需要跨來源隔離。GitHub Pages 無法設定 COOP/COEP 標頭，所以由 `service-worker.js` 替導覽回應與 worker 腳本加上 `Cross-Origin-Opener-Policy: same-origin` 與 `Cross-Origin-Embedder-Policy: credentialless`。兩者缺一不可：只有頁面隔離時，`new Worker()` 會載入失敗，語意搜尋整個無法使用；`finder:check` 會檢查這兩處。用 `credentialless` 而不是 `require-corp`，是因為 Flickr 圖片沒有 CORP 標頭。
+
+隔離後 ONNX Runtime 預設使用 `min(4, ceil(核心數 / 2))` 條執行緒，不另外設定。實測每次查詢的中位數：Pixel 8 Pro 從 735 ms 降到 387 ms，Mac 強制 WASM 從 234 ms 降到 64 ms，WebGPU 不受影響，各執行緒數的結果完全相同。Pixel 8 Pro 上 2 條幾乎沒有改善，8 條以前實測反而變慢，因為會排到效能較低的核心。第一次造訪（service worker 尚未接管）、service worker 被註銷，以及不支援 `credentialless` 的 Safari，都會退回單執行緒，不會擋下任何資源。
 
 ## 參考數字
 

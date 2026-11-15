@@ -231,6 +231,7 @@ async function loadModel(message) {
     tokenizer: message.tokenizer?.url ? message.tokenizer : null,
     dims: Number(message.dims) || 512,
     queryPrefix: String(message.queryPrefix ?? ""),
+    threads: Number(message.threads) || 0,
   };
   const adapter = await detectAdapter();
   const info = adapter?.info;
@@ -250,6 +251,11 @@ async function loadModel(message) {
   }
   // Pin every Hub request, including transformers.js internal probes that do
   // not forward `revision`, to the fixed model revision.
+  // ORT defaults to 1 thread without cross-origin isolation and to
+  // min(4, ceil(cores / 2)) with it; small cores make more threads slower.
+  if (self.crossOriginIsolated && settings.threads > 0) {
+    env.backends.onnx.wasm.numThreads = settings.threads;
+  }
   env.remotePathTemplate = `{model}/resolve/${encodeURIComponent(settings.revision)}/`;
 
   const runtimeUrl = env.backends.onnx.wasm?.wasmPaths?.wasm;
@@ -307,6 +313,10 @@ async function loadModel(message) {
   await embedText("warmup");
   mark("warmup");
   timings.tokenizer = tokenizerSource || "cache";
+  if (settings.debug) {
+    timings.numThreads = String(env.backends.onnx.wasm.numThreads ?? "unset");
+    timings.cores = String(navigator.hardwareConcurrency ?? "?");
+  }
   return backend;
 }
 
