@@ -48,10 +48,12 @@ export function parseVectorMeta(payload) {
       kind,
       file: String(set.file),
       bytes,
+      ...encodedTransfer(set, bytes),
       sha256: String(set.sha256),
       covered: Number(set.covered) || 0,
     };
   }
+  const tokenizer = parseEncodedFile(payload.queryModel?.tokenizer);
   return {
     formatVersion: payload.formatVersion,
     dims,
@@ -63,10 +65,93 @@ export function parseVectorMeta(payload) {
       id: String(payload.queryModel?.id ?? ""),
       revision: String(payload.queryModel?.revision ?? ""),
       dtype: String(payload.queryModel?.dtype ?? ""),
+      ...(tokenizer ? { tokenizer } : {}),
     },
     photosSha256: String(payload.photosSha256 ?? ""),
     sets,
   };
+}
+
+// Files may ship gzip-encoded; `bytes` and `sha256` always describe the decoded
+// data and `transferBytes` what is downloaded.
+function encodedTransfer(entry, bytes) {
+  const encoding = entry.encoding === "gzip" ? "gzip" : "";
+  return { encoding, transferBytes: encoding ? positiveInteger(entry.transferBytes) || bytes : bytes };
+}
+
+function parseEncodedFile(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const bytes = positiveInteger(entry.bytes);
+  if (!entry.file || !bytes || !/^[0-9a-f]{64}$/.test(String(entry.sha256 ?? ""))) {
+    return null;
+  }
+  return { file: String(entry.file), bytes, ...encodedTransfer(entry, bytes), sha256: String(entry.sha256) };
+}
+
+// Reads a response body into exactly `expectedBytes` bytes. A gzip body (Pages
+// serves .gz files as-is) is decoded with DecompressionStream; a body that a
+// proxy already decoded is detected by its missing gzip magic and used as is.
+// onProgress receives the number of body bytes received so far.
+export async function readEncodedBody(response, { expectedBytes, onProgress = () => {} }) {
+  const output = new Uint8Array(expectedBytes);
+  let offset = 0;
+  const append = (chunk) => {
+    if (offset + chunk.byteLength > expectedBytes) {
+      throw new Error("下載的檔案大小超出預期");
+    }
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  };
+  const source = response.body ?? new Response(await response.arrayBuffer()).body;
+  const reader = source.getReader();
+  let received = 0;
+  const first = await reader.read();
+  const head = first.done ? new Uint8Array(0) : first.value;
+  received += head.byteLength;
+  onProgress(received);
+  const gzip = head.byteLength >= 2 && head[0] === 0x1f && head[1] === 0x8b;
+  if (!gzip) {
+    append(head);
+    for (let chunk = first.done ? { done: true } : await reader.read(); !chunk.done; chunk = await reader.read()) {
+      received += chunk.value.byteLength;
+      onProgress(received);
+      append(chunk.value);
+    }
+  } else {
+    const counted = new ReadableStream({
+      start(controller) {
+        controller.enqueue(head);
+      },
+      async pull(controller) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          controller.close();
+          return;
+        }
+        received += chunk.value.byteLength;
+        onProgress(received);
+        controller.enqueue(chunk.value);
+      },
+      cancel(reason) {
+        return reader.cancel(reason);
+      },
+    });
+    const decoded = counted.pipeThrough(new DecompressionStream("gzip")).getReader();
+    for (let chunk = await decoded.read(); !chunk.done; chunk = await decoded.read()) {
+      try {
+        append(chunk.value);
+      } catch (error) {
+        await decoded.cancel();
+        throw error;
+      }
+    }
+  }
+  if (offset !== expectedBytes) {
+    throw new Error("檔案下載不完整");
+  }
+  return output;
 }
 
 // Parses one quantized vector file: each row is `dims` int8 values followed by

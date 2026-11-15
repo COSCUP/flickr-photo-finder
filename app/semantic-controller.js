@@ -1,7 +1,7 @@
 // Opt-in semantic search lifecycle: consent dialog, downloads with progress,
 // Cache API reuse, the query worker, and the per-device enabled preference.
 // Ranking stays in semantic-search.js; this module owns network and storage.
-import { parseVectorMeta, parseVectorSet } from "./semantic-search.js";
+import { parseVectorMeta, parseVectorSet, readEncodedBody } from "./semantic-search.js";
 
 export const semanticStorageKey = "coscup-photo-finder-semantic";
 // Must not start with "coscup-photo-finder-": the service worker deletes those
@@ -11,8 +11,10 @@ export const modelCacheName = "transformers-cache";
 export const modelCacheFiles = ["onnx/model_q4.onnx", "onnx/model_q4.onnx_data", "tokenizer.json", "tokenizer_config.json"];
 const modelHost = "https://huggingface.co";
 // Transfer sizes. The runtime (transformers.js plus the ORT WASM binary) comes
-// compressed from jsDelivr: about 5.7 MB on the wire, 27 MB once decoded.
-const estimatedBytes = { model: 206_000_000, runtime: 5_700_000, vectorSet: 17_715_312 };
+// compressed from jsDelivr: about 5.7 MB on the wire, 27 MB once decoded. The
+// model weights come uncompressed from huggingface.co; the tokenizer comes
+// gzipped from this site when meta.json lists it (5.4 MB instead of 32 MB).
+const estimatedBytes = { modelWeights: 175_000_000, tokenizer: 32_200_000, runtime: 5_700_000, vectorSet: 13_300_000 };
 const embeddingCacheSize = 32;
 
 // transformers-cache keys are full Hub URLs; entries for this model share the
@@ -232,6 +234,12 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     return new URL(set.file, resolveMetaUrl()).toString();
   }
 
+  // Query model download: weights from huggingface.co plus the tokenizer,
+  // gzipped from this site when the deployment ships it.
+  function modelEstimate() {
+    return estimatedBytes.modelWeights + (state.meta?.queryModel.tokenizer?.transferBytes ?? estimatedBytes.tokenizer);
+  }
+
   function vectorCacheName(set) {
     return `${vectorCachePrefix}${set.sha256}`;
   }
@@ -325,48 +333,20 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     return mode === "full" ? modelFilesCached(meta) : true;
   }
 
-  async function readStream(response, expectedBytes, onProgress) {
-    if (!response.body) {
-      const buffer = new Uint8Array(await response.arrayBuffer());
-      onProgress(buffer.byteLength);
-      return buffer;
-    }
-    const output = new Uint8Array(expectedBytes);
-    const reader = response.body.getReader();
-    let offset = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (offset + value.byteLength > expectedBytes) {
-        await reader.cancel();
-        throw new Error("向量檔大小超出預期");
-      }
-      output.set(value, offset);
-      offset += value.byteLength;
-      onProgress(offset);
-    }
-    if (offset !== expectedBytes) {
-      throw new Error("向量檔下載不完整");
-    }
-    return output;
-  }
-
   async function loadVectorSet(meta, kind, { allowNetwork, signal, token }) {
     const set = meta.sets[kind];
     if (!set) {
       throw new Error(`這次部署沒有 ${kind === "text" ? "文字" : "圖片"} 向量`);
     }
     const onProgress = (loaded) => {
-      progress.vectors.set(kind, { loaded, total: set.bytes });
+      progress.vectors.set(kind, { loaded, total: set.transferBytes });
       renderProgress();
     };
     let bytes;
     const cached = await cachedVector(set);
     if (cached) {
       bytes = new Uint8Array(await cached.arrayBuffer());
-      onProgress(bytes.byteLength);
+      onProgress(set.transferBytes);
     } else {
       if (!allowNetwork) {
         throw new Error("需要重新下載");
@@ -375,7 +355,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       if (!response.ok) {
         throw new Error(`無法下載向量：HTTP ${response.status}`);
       }
-      bytes = await readStream(response, set.bytes, onProgress);
+      bytes = await readEncodedBody(response, { expectedBytes: set.bytes, onProgress });
       const digest = await sha256Hex(bytes);
       if (digest && digest !== set.sha256) {
         throw new Error("向量檔內容與 sha256 不符");
@@ -477,6 +457,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         modelId: meta.queryModel.id,
         revision: meta.queryModel.revision,
         dtype: (semanticDebug && debugParams.get("semantic-dtype")) || meta.queryModel.dtype || "q4",
+        tokenizer: meta.queryModel.tokenizer ? { ...meta.queryModel.tokenizer, url: vectorUrl(meta.queryModel.tokenizer) } : null,
         debug: semanticDebug,
         placement: semanticDebug && debugParams.has("semantic-placement"),
         backend: semanticDebug ? (debugParams.get("semantic-backend") ?? "") : "",
@@ -487,7 +468,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
   }
 
   function resetProgress(mode, kinds) {
-    progress.vectors = new Map(kinds.map((kind) => [kind, { loaded: 0, total: state.meta?.sets[kind]?.bytes ?? estimatedBytes.vectorSet }]));
+    progress.vectors = new Map(kinds.map((kind) => [kind, { loaded: 0, total: state.meta?.sets[kind]?.transferBytes ?? estimatedBytes.vectorSet }]));
     progress.model = new Map();
     progress.runtime = 0;
     progress.stage = "";
@@ -686,7 +667,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       modelTotal += item.total;
     }
     if (progress.includeModel) {
-      modelTotal = workerReady ? modelLoaded || modelTotal : Math.max(modelTotal, estimatedBytes.model);
+      modelTotal = workerReady ? modelLoaded || modelTotal : Math.max(modelTotal, modelEstimate());
       if (workerReady) {
         modelLoaded = modelTotal;
       }
@@ -737,13 +718,13 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
   function renderSizes() {
     const sets = state.meta?.sets;
     const vectorBytes = sets
-      ? Object.values(sets).reduce((total, set) => total + set.bytes, 0)
+      ? Object.values(sets).reduce((total, set) => total + set.transferBytes, 0)
       : estimatedBytes.vectorSet * 2;
-    const imageBytes = sets?.image?.bytes ?? estimatedBytes.vectorSet;
+    const imageBytes = sets?.image?.transferBytes ?? estimatedBytes.vectorSet;
     dom.sizeVectors.textContent = `約 ${formatMegabytes(vectorBytes)}`;
-    dom.sizeModel.textContent = `約 ${formatMegabytes(estimatedBytes.model)}`;
+    dom.sizeModel.textContent = `約 ${formatMegabytes(modelEstimate())}`;
     dom.sizeRuntime.textContent = `約 ${formatMegabytes(estimatedBytes.runtime)}`;
-    dom.sizeTotal.textContent = `約 ${formatMegabytes(vectorBytes + estimatedBytes.model + estimatedBytes.runtime)}`;
+    dom.sizeTotal.textContent = `約 ${formatMegabytes(vectorBytes + modelEstimate() + estimatedBytes.runtime)}`;
     dom.enableImage.textContent = `只下載以圖找圖（約 ${formatMegabytes(imageBytes)}）`;
     renderModelInfo();
   }

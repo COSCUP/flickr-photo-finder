@@ -16,6 +16,16 @@ export const embeddingQueryModel = {
   dtype: "q4",
 };
 export const embeddingKinds = ["text", "image"];
+// tokenizer.json of the pinned query model, gzipped (level 9) and kept in the
+// repo so Pages serves it at about 5.4 MB instead of the 32 MB that
+// huggingface.co sends uncompressed. sha256 and bytes are of the decoded file,
+// matching the Hub's LFS object. The name avoids "token", which the Pages
+// artifact check reserves for credential-like files.
+export const embeddingQueryVocabulary = {
+  file: "query-vocabulary.json.gz",
+  sha256: "4d777ef5bdc1aa36227abdfb77c3e49e7b9c892d16e1b6bda41c393504828be4",
+  bytes: 32170510,
+};
 
 export function sha256Hex(value) {
   return createHash("sha256").update(value).digest("hex");

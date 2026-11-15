@@ -72,6 +72,7 @@ pnpm finder:embed --rebuild
 3. 用新的引擎設定執行 `pnpm finder:embed --rebuild`，所有照片全部重算。
 4. 驗證後 commit；舊分段由重建取代。
 5. 前端若需要改查詢模型的 id、revision 或 dtype，連同瀏覽器端程式一起修改，不要只改其中一邊。
+6. 查詢模型的 revision 改變時，一併更新 `data/embeddings/query-vocabulary.json.gz`：從新 revision 下載 `tokenizer.json`，用 Node 的 `zlib.gzipSync(data, { level: 9 })` 壓縮後覆蓋這個檔案，再把 `scripts/lib/finder/embeddings.mjs` 的 `embeddingQueryVocabulary` 改成新檔案解壓後的 sha256 與大小（Hub 的 LFS sha256 可用來核對）。build 與 `finder:check` 會擋下不一致的檔案；如果刪掉這個檔案，前端會改向 huggingface.co 下載 `tokenizer.json`（32 MB，不壓縮）。
 
 ## 驗證
 

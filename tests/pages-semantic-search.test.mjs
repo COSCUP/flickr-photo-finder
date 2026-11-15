@@ -18,6 +18,7 @@ import {
   parseVectorMeta,
   parseVectorSet,
   rankScores,
+  readEncodedBody,
   rewriteGatherBlockQuantized,
   resolveResultView,
   rowVector,
@@ -401,5 +402,37 @@ describe("query model backend", () => {
     assert.equal(replaced, 0);
     assert.deepEqual(bytes, model);
     assert.throws(() => rewriteGatherBlockQuantized(Uint8Array.from([0x80])), /格式不正確/);
+  });
+});
+
+describe("encoded downloads", () => {
+  const payload = Uint8Array.from({ length: 5000 }, (_, index) => (index * 7) % 13);
+  const gzipBytes = async (bytes) => new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer());
+  const chunked = (bytes, size = 700) => new Response(new ReadableStream({
+    start(controller) {
+      for (let offset = 0; offset < bytes.length; offset += size) {
+        controller.enqueue(bytes.slice(offset, offset + size));
+      }
+      controller.close();
+    },
+  }));
+
+  it("decodes a gzip body and reports received (compressed) bytes", async () => {
+    const compressed = await gzipBytes(payload);
+    const seen = [];
+    const decoded = await readEncodedBody(chunked(compressed), { expectedBytes: payload.length, onProgress: (loaded) => seen.push(loaded) });
+    assert.deepEqual(decoded, payload);
+    assert.equal(seen.at(-1), compressed.length);
+    assert.ok(seen.every((value, index) => index === 0 || value >= seen[index - 1]));
+  });
+
+  it("accepts a body a proxy already decoded", async () => {
+    const decoded = await readEncodedBody(chunked(payload), { expectedBytes: payload.length });
+    assert.deepEqual(decoded, payload);
+  });
+
+  it("rejects bodies larger or smaller than expected", async () => {
+    await assert.rejects(readEncodedBody(chunked(await gzipBytes(payload)), { expectedBytes: payload.length - 1 }), /超出預期/);
+    await assert.rejects(readEncodedBody(chunked(payload), { expectedBytes: payload.length + 1 }), /不完整/);
   });
 });

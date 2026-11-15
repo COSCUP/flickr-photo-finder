@@ -1,7 +1,7 @@
 // Web Worker for opt-in semantic search. It loads only the text half of the
 // pinned EmbeddingGemma 2 ONNX model and turns query text into a normalized
 // vector. Queries never leave the browser; only model files are downloaded.
-import { chooseQueryBackend, rewriteGatherBlockQuantized } from "./semantic-search.js";
+import { chooseQueryBackend, readEncodedBody, rewriteGatherBlockQuantized } from "./semantic-search.js";
 
 // Decoded size of ort-wasm-simd-threaded.asyncify.wasm for the onnxruntime-web
 // build that transformers.js 4.3.2 pins; only used to scale progress.
@@ -53,7 +53,15 @@ async function fetchTextConfig({ modelId, revision }) {
   return config;
 }
 
+// "local" once tokenizer.json came from this site, "hub" after falling back.
+// Unless it fell back, its progress is reported here in transfer bytes, not by
+// transformers.js in decoded bytes (also when it is restored from the cache).
+let tokenizerSource = "";
+
 function progressCallback(info) {
+  if (info?.file === "tokenizer.json" && settings?.tokenizer && tokenizerSource !== "hub") {
+    return;
+  }
   if (info?.status === "progress" && info.file) {
     post({ type: "progress", file: info.file, loaded: Number(info.loaded) || 0, total: Number(info.total) || 0 });
   }
@@ -184,6 +192,25 @@ async function prepareWasmGraph({ modelId, revision, dtype }) {
   }
 }
 
+// huggingface.co sends tokenizer.json (32 MB) uncompressed; this site ships
+// the same file gzipped (about 5.4 MB). The decoded bytes must match the
+// pinned file's sha256, otherwise the caller falls back to huggingface.co.
+async function fetchSiteTokenizer(tokenizer) {
+  const response = await fetch(tokenizer.url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const bytes = await readEncodedBody(response, {
+    expectedBytes: tokenizer.bytes,
+    onProgress: (loaded) => post({ type: "progress", file: "tokenizer.json", loaded: Math.min(loaded, tokenizer.transferBytes), total: tokenizer.transferBytes }),
+  });
+  const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  if (digest !== tokenizer.sha256) {
+    throw new Error("tokenizer sha256 mismatch");
+  }
+  return new Response(bytes, { headers: { "content-type": "application/json; charset=utf-8" } });
+}
+
 async function detectAdapter() {
   try {
     return (await navigator.gpu?.requestAdapter()) ?? null;
@@ -201,6 +228,7 @@ async function loadModel(message) {
     debug: Boolean(message.debug),
     placement: Boolean(message.placement),
     backend: String(message.backend ?? ""),
+    tokenizer: message.tokenizer?.url ? message.tokenizer : null,
     dims: Number(message.dims) || 512,
     queryPrefix: String(message.queryPrefix ?? ""),
   };
@@ -229,7 +257,25 @@ async function loadModel(message) {
   // Hand the prefetched binary to transformers.js when ORT asks for it, so it
   // is downloaded once; transformers.js then stores it in its cache as usual.
   const baseFetch = env.fetch;
+  const hubTokenizerUrl = `${modelHost}/${settings.modelId}/resolve/${encodeURIComponent(settings.revision)}/tokenizer.json`;
   env.fetch = async (url, init) => {
+    if (settings.tokenizer && String(url) === hubTokenizerUrl && tokenizerSource !== "hub" && new Headers(init?.headers).has("range")) {
+      // transformers.js probes the file with a range request first; answer it
+      // here so huggingface.co is not contacted for the tokenizer at all.
+      return new Response(new Uint8Array(1), {
+        status: 206,
+        headers: { "content-range": `bytes 0-0/${settings.tokenizer.bytes}`, "content-length": "1", "content-type": "application/json" },
+      });
+    }
+    if (settings.tokenizer && String(url) === hubTokenizerUrl && tokenizerSource !== "hub") {
+      try {
+        const response = await fetchSiteTokenizer(settings.tokenizer);
+        tokenizerSource = "local";
+        return response;
+      } catch {
+        tokenizerSource = "hub";
+      }
+    }
     if (runtimeUrl && String(url) === runtimeUrl) {
       const buffer = await runtimePromise;
       if (buffer) {
@@ -260,6 +306,7 @@ async function loadModel(message) {
   // backend can actually run the graph.
   await embedText("warmup");
   mark("warmup");
+  timings.tokenizer = tokenizerSource || "cache";
   return backend;
 }
 

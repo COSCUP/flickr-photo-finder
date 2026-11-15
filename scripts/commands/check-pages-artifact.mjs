@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { parseArgs as parseNodeArgs } from "node:util";
+import { gunzipSync } from "node:zlib";
 import {
   countCoveredRows,
   embeddingDims,
@@ -8,6 +9,7 @@ import {
   embeddingKinds,
   embeddingQueryModel,
   embeddingQueryPrefix,
+  embeddingQueryVocabulary,
   embeddingRowBytes,
   embeddingSourceModel,
   sha256Hex,
@@ -254,12 +256,10 @@ async function assertSemanticVectors(artifactDir, metaUrl) {
   const expectedBytes = meta.rowCount * embeddingRowBytes;
   for (const kind of kinds) {
     const set = meta.sets[kind];
-    if (set.file !== `${kind}-int8.bin`) {
-      throw new Error(`vectors meta.json ${kind} file must be ${kind}-int8.bin`);
+    if (set.file !== `${kind}-int8.bin.gz` || set.encoding !== "gzip") {
+      throw new Error(`vectors meta.json ${kind} file must be gzip-encoded ${kind}-int8.bin.gz`);
     }
-    const path = join(vectorsDir, set.file);
-    await assertFile(path);
-    const data = await readFile(path);
+    const data = await readGzipEntry(vectorsDir, set);
     if (data.length !== expectedBytes || set.bytes !== expectedBytes) {
       throw new Error(`${set.file} must be rowCount x ${embeddingRowBytes} = ${expectedBytes} bytes, got ${data.length}`);
     }
@@ -270,8 +270,29 @@ async function assertSemanticVectors(artifactDir, metaUrl) {
       throw new Error(`${set.file} covered row count does not match vectors meta.json`);
     }
   }
+  const tokenizer = meta.queryModel?.tokenizer;
+  if (tokenizer) {
+    if (tokenizer.file !== embeddingQueryVocabulary.file || tokenizer.encoding !== "gzip") {
+      throw new Error(`vectors meta.json queryModel.tokenizer must be gzip-encoded ${embeddingQueryVocabulary.file}`);
+    }
+    const data = await readGzipEntry(vectorsDir, tokenizer);
+    if (data.length !== embeddingQueryVocabulary.bytes || sha256Hex(data) !== embeddingQueryVocabulary.sha256 || tokenizer.sha256 !== embeddingQueryVocabulary.sha256) {
+      throw new Error(`${tokenizer.file} does not match the pinned query model tokenizer`);
+    }
+  }
   await assertFile(join(artifactDir, semanticWorkerFile));
   await assertJavaScriptImportGraph(artifactDir, semanticWorkerFile);
+}
+
+// Reads a gzip-encoded vectors entry after checking its transfer size.
+async function readGzipEntry(vectorsDir, entry) {
+  const path = join(vectorsDir, entry.file);
+  await assertFile(path);
+  const compressed = await readFile(path);
+  if (compressed.length !== entry.transferBytes) {
+    throw new Error(`${entry.file} transferBytes does not match the file size`);
+  }
+  return gunzipSync(compressed);
 }
 
 async function main() {

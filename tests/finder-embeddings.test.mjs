@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
+import { gunzipSync, gzipSync } from "node:zlib";
 import {
   createEmbeddingClient,
   embeddingsEndpoint,
@@ -15,6 +16,7 @@ import {
   countCoveredRows,
   dequantizeRow,
   documentText,
+  embeddingQueryVocabulary,
   embeddingRowBytes,
   mergeEmbeddingSegments,
   quantizeEmbedding,
@@ -25,7 +27,7 @@ import {
   truncateAndNormalize,
   writeEmbeddingStore,
 } from "../scripts/lib/finder/embeddings.mjs";
-import { buildFinderVectorPayloads } from "../scripts/lib/pages/finder-embeddings.mjs";
+import { buildFinderVectorPayloads, checkQueryVocabulary } from "../scripts/lib/pages/finder-embeddings.mjs";
 
 function seededVector(seed, length = 768) {
   let state = seed >>> 0;
@@ -203,7 +205,7 @@ describe("finder embedding Pages artifact", () => {
     assert.deepEqual(data.subarray(2 * embeddingRowBytes), rowFor(3));
   });
 
-  it("builds meta.json with rowCount x 516 byte sets and skips kinds without segments", () => {
+  it("builds gzip-encoded rowCount x 516 byte sets and skips kinds without segments", () => {
     const payloads = buildFinderVectorPayloads({
       segments: [segment("text", ["p2"], [2], ["h2"])],
       photoIds: ["p1", "p2", "p3", "p4"],
@@ -214,11 +216,35 @@ describe("finder embedding Pages artifact", () => {
     assert.match(payloads.meta.sourceModel, /^EmbeddingGemma 2 /);
     assert.deepEqual(Object.keys(payloads.meta.sets), ["text"]);
     const set = payloads.meta.sets.text;
+    assert.equal(set.file, "text-int8.bin.gz");
+    assert.equal(set.encoding, "gzip");
     assert.equal(set.bytes, 4 * 516);
-    assert.equal(payloads.files["text-int8.bin"].length, set.bytes);
-    assert.equal(set.sha256, sha256Hex(payloads.files["text-int8.bin"]));
+    const compressed = payloads.files["text-int8.bin.gz"];
+    assert.equal(set.transferBytes, compressed.length);
+    const decoded = gunzipSync(compressed);
+    assert.equal(decoded.length, set.bytes);
+    assert.equal(set.sha256, sha256Hex(decoded));
     assert.equal(set.covered, 1);
+    assert.equal(payloads.meta.queryModel.tokenizer, undefined);
     assert.equal(buildFinderVectorPayloads({ segments: [], photoIds: ["p1"], photosSha256: "abc" }), null);
+  });
+});
+
+describe("query vocabulary", () => {
+  it("ships the repo copy only when it matches the pinned tokenizer", async () => {
+    const vocabulary = await readFile(join("data/embeddings", embeddingQueryVocabulary.file));
+    const entry = checkQueryVocabulary(vocabulary);
+    assert.deepEqual(entry, {
+      file: embeddingQueryVocabulary.file,
+      encoding: "gzip",
+      bytes: embeddingQueryVocabulary.bytes,
+      transferBytes: vocabulary.length,
+      sha256: embeddingQueryVocabulary.sha256,
+    });
+    const payloads = buildFinderVectorPayloads({ segments: [segment("image", ["p1"], [1])], photoIds: ["p1"], photosSha256: "abc", vocabulary });
+    assert.deepEqual(payloads.meta.queryModel.tokenizer, entry);
+    assert.equal(payloads.files[embeddingQueryVocabulary.file], vocabulary);
+    assert.throws(() => checkQueryVocabulary(gzipSync(Buffer.from("{}"))), /does not match the pinned/);
   });
 });
 

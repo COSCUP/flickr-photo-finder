@@ -26,8 +26,8 @@ PoC 評測的方式如下：
 
 - **使用者主動開啟**：預設完全不下載任何向量、模型或函式庫。使用者在對話框中看到各項下載來源與大小後，才按下下載；下載有進度，可取消。
 - **下載來源與大小**：
-  - 照片向量來自同一個 Pages 部署，文字與圖片兩份合計約 35 MB；只用以圖找圖時只下載圖片向量，約 18 MB。
-  - 查詢文字模型來自 huggingface.co，固定 revision，約 206 MB。
+  - 照片向量來自同一個 Pages 部署，以 gzip 傳送，文字與圖片兩份合計約 27 MB（解壓後 35 MB）；只用以圖找圖時只下載圖片向量，約 13 MB。
+  - 查詢文字模型的權重來自 huggingface.co，固定 revision，約 175 MB。tokenizer（`tokenizer.json`，32 MB）huggingface.co 不壓縮，所以把同一個檔案以 gzip 存進 repo（`data/embeddings/query-vocabulary.json.gz`），由本站提供，約 5.4 MB；build 與 `finder:check` 驗證它和固定 revision 的 sha256 相同，瀏覽器下載後也會驗證，不符時改向 huggingface.co 下載。
   - transformers.js 與 ONNX Runtime WASM 來自 jsDelivr，固定版本 4.3.2；jsDelivr 壓縮傳輸約 6 MB，解壓後約 27 MB。WASM 與模型同時下載並顯示進度，不等模型下載完才開始。
 - **揭露使用的模型**：對話框列出照片向量與查詢使用的模型、量化方式、固定 revision 與授權（Google EmbeddingGemma 2，Apache 2.0），內容取自部署的 `vectors/meta.json`。
 - **查詢不離開瀏覽器**：查詢文字只在瀏覽器內由 Web Worker 轉成向量，不送往任何第三方，也不送進 GA4。但模型與函式庫的下載請求會連到 huggingface.co 與 jsDelivr，這是使用者開啟前必須被告知的事實。
@@ -63,11 +63,11 @@ PoC 評測的方式如下：
 - 在不新增後端、不保存 credential 的前提下，把原本找不到的描述型查詢大幅改善。
 - 預設不下載，不增加一般使用者的流量；開啟前明示來源與大小。
 - 向量分段不可變，git diff 只會新增檔案，補算新照片的成本與儲存量隨差異成長。
-- 以圖找圖只需約 18 MB，不必下載文字模型。
+- 以圖找圖只需約 13 MB，不必下載文字模型。
 
 代價：
 
-- 第一次完整開啟約下載 250 MB，行動網路使用者需要自行判斷。
+- 第一次完整開啟約下載 213 MB，行動網路使用者需要自行判斷。
 - 新增兩個第三方下載依賴（huggingface.co、jsDelivr）。它們不可用時語意搜尋就無法開啟，但關鍵字搜尋不受影響。版本與 revision 固定，避免上游內容在使用者不知情下改變。
 - 不支援 WebGPU 或使用 Mali GPU 的環境以單執行緒 WASM 執行查詢模型，比 WebGPU 慢；GitHub Pages 無法設定跨來源隔離所需的標頭，所以無法使用多執行緒。
 - 維護者需要一台能跑 EmbeddingGemma 2 的 Apple Silicon Mac；沒有 GPU 類加速時補算會很慢。
