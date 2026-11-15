@@ -345,3 +345,79 @@ export function splitResultTabs({ photos, keywordResults, semanticRows }) {
     semantic: photosForRows(photos, semanticRows),
   };
 }
+
+// On these WebGPU vendors the q4 MatMulNBits kernels are far slower than the
+// WASM CPU kernels: on a Pixel 8 Pro (Mali-G715) a query took about 10 s on
+// the GPU and about 5 s with MatMulNBits on the CPU, while every other node
+// together took about 0.13 s on the GPU. `override` ("cpu" or "gpu") is a
+// debug switch.
+export const cpuMatMulGpuVendors = ["arm"];
+
+export function shouldRunMatMulOnCpu({ vendor = "", override = "" } = {}) {
+  if (override === "cpu" || override === "gpu") {
+    return override === "cpu";
+  }
+  return cpuMatMulGpuVendors.includes(String(vendor).toLowerCase());
+}
+
+// Names of the nodes with `opType` in an ONNX ModelProto. Only
+// ModelProto.graph (field 7) -> GraphProto.node (field 1) -> NodeProto.name
+// (field 3) / op_type (field 4) are decoded; everything else is skipped.
+export function onnxNodeNames(buffer, opType) {
+  const bytes = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const decoder = new TextDecoder();
+  const readVarint = (view, position) => {
+    let value = 0;
+    let shift = 0;
+    for (;;) {
+      if (position >= view.length) {
+        throw new Error("ONNX 模型格式不正確");
+      }
+      const byte = view[position++];
+      value += (byte & 0x7f) * 2 ** shift;
+      if (byte < 0x80) {
+        return [value, position];
+      }
+      shift += 7;
+    }
+  };
+  const lengthDelimited = (view, wanted) => {
+    const found = [];
+    let position = 0;
+    while (position < view.length) {
+      let key;
+      [key, position] = readVarint(view, position);
+      const field = Math.floor(key / 8);
+      const wire = key % 8;
+      if (wire === 0) {
+        [, position] = readVarint(view, position);
+      } else if (wire === 1) {
+        position += 8;
+      } else if (wire === 5) {
+        position += 4;
+      } else if (wire === 2) {
+        let length;
+        [length, position] = readVarint(view, position);
+        if (field === wanted || wanted === undefined) {
+          found.push([field, view.subarray(position, position + length)]);
+        }
+        position += length;
+      } else {
+        throw new Error("ONNX 模型格式不正確");
+      }
+    }
+    return found;
+  };
+  const names = [];
+  for (const [, graph] of lengthDelimited(bytes, 7)) {
+    for (const [, node] of lengthDelimited(graph, 1)) {
+      const parts = lengthDelimited(node);
+      const type = parts.find(([field]) => field === 4);
+      const name = parts.find(([field]) => field === 3);
+      if (type && name && decoder.decode(type[1]) === opType) {
+        names.push(decoder.decode(name[1]));
+      }
+    }
+  }
+  return names;
+}

@@ -15,6 +15,7 @@ import {
   fuseRankings,
   hasVector,
   normalizeVector,
+  onnxNodeNames,
   parseVectorMeta,
   parseVectorSet,
   rankScores,
@@ -23,6 +24,7 @@ import {
   rowVector,
   scoreRows,
   semanticRanking,
+  shouldRunMatMulOnCpu,
   similarRanking,
   splitResultTabs,
   topRows,
@@ -336,5 +338,37 @@ describe("semantic capability and similar-state transitions", () => {
       similar: "",
       similarReturn: null,
     });
+  });
+});
+
+describe("query model placement", () => {
+  const varint = (value) => {
+    const out = [];
+    while (value >= 0x80) {
+      out.push((value % 128) | 0x80);
+      value = Math.floor(value / 128);
+    }
+    out.push(value);
+    return out;
+  };
+  const bytesField = (field, payload) => [...varint(field * 8 + 2), ...varint(payload.length), ...payload];
+  const text = (value) => [...new TextEncoder().encode(value)];
+  const node = (name, opType) => bytesField(1, [...bytesField(3, text(name)), ...bytesField(4, text(opType)), ...bytesField(1, text("input"))]);
+
+  it("lists node names of one op type from an ONNX model", () => {
+    const graph = [...node("/a/MatMul_Quant", "MatMulNBits"), ...node("/a/Gelu", "Gelu"), ...bytesField(2, text("main")), ...node("/b/MatMul_Quant", "MatMulNBits")];
+    const model = Uint8Array.from([...varint(1 * 8), 9, ...bytesField(7, graph), ...bytesField(8, text("opset"))]);
+    assert.deepEqual(onnxNodeNames(model, "MatMulNBits"), ["/a/MatMul_Quant", "/b/MatMul_Quant"]);
+    assert.deepEqual(onnxNodeNames(model.buffer, "Gelu"), ["/a/Gelu"]);
+    assert.deepEqual(onnxNodeNames(model, "Softmax"), []);
+    assert.throws(() => onnxNodeNames(Uint8Array.from([0x80]), "MatMulNBits"), /格式不正確/);
+  });
+
+  it("runs MatMulNBits on the CPU only for slow GPU vendors unless overridden", () => {
+    assert.equal(shouldRunMatMulOnCpu({ vendor: "arm" }), true);
+    assert.equal(shouldRunMatMulOnCpu({ vendor: "apple" }), false);
+    assert.equal(shouldRunMatMulOnCpu({ vendor: "" }), false);
+    assert.equal(shouldRunMatMulOnCpu({ vendor: "arm", override: "gpu" }), false);
+    assert.equal(shouldRunMatMulOnCpu({ vendor: "apple", override: "cpu" }), true);
   });
 });

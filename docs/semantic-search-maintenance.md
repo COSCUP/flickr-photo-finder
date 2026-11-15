@@ -109,8 +109,17 @@ pnpm finder:check
 | `semantic-debug` | 開啟除錯。計時欄位：`import`、`config`、`runtime`、`tokenizer`、`modelFiles`（模型檔下載或從快取讀完）、`session`（WebGPU session 建好）、`warmup`（第一次推論完成），另附 GPU 型號與支援的功能。 |
 | `semantic-placement` | 搭配 `semantic-debug`，回報 ONNX Runtime 把哪些節點分配到 CPU。 |
 | `semantic-dtype=q4f16` | 搭配 `semantic-debug`，改用同一個模型的其他量化版本做比較。 |
+| `semantic-matmul=cpu` 或 `gpu` | 搭配 `semantic-debug`，強制 `MatMulNBits` 在 CPU（WASM）或 WebGPU 上執行，覆蓋依 GPU 廠商的自動判斷。 |
 
 手機上要測文字語意搜尋，需要 HTTPS 或 localhost，否則瀏覽器不提供 WebGPU 與 Cache API。
+
+要看每個節點的耗時，可以在實驗用的 worker 對 session 開 `enableProfiling: true`，推論後呼叫 `model.sessions.model.endProfiling()`。ONNX Runtime Web 沒有檔案系統，會把整份 profile JSON 逐行印到 worker 的 console；`cat` 為 `Api` 的事件是每個 WebGPU program 的耗時，`Node` 事件是 CPU 端時間（受瀏覽器計時精度限制，約 100 µs）。profile 會累積整個 session，分析時只取最後一次推論的事件。
+
+## Android 與 Mali GPU
+
+在 Pixel 8 Pro（Mali-G715）上，q4 的 `MatMulNBits` 用 WebGPU 執行時，一次查詢約 10 秒，其中 98% 以上都花在這 146 個節點；模型其餘節點在 GPU 上合計約 0.13 秒。改成 DP4A kernel 或 q4f16 都沒有改善，GPU 在查詢期間維持在最高頻率附近，簡單的矩陣乘法測試也只有約 55 GFLOPS。因此 GPU 廠商是 `arm` 時，worker 會讀取模型結構（約 0.5 MB），把所有 `MatMulNBits` 節點交給 CPU（WASM）執行，其他節點仍在 WebGPU 上。實測每次查詢約 4 秒。
+
+頁面若能啟用跨來源隔離，WASM 可以使用多執行緒，實測約 3 秒；但 GitHub Pages 無法設定 COOP/COEP 標頭，需要由 service worker 加上，影響整個網站，目前沒有採用。
 
 ## 參考數字
 

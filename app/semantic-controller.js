@@ -59,9 +59,10 @@ export function writeSemanticPreference(mode, storage = globalThis.localStorage)
 
 // `?semantic-debug` shows query-model timings on the page and sends them to
 // the serving host, so a slow phone can be diagnosed without remote DevTools.
-// `semantic-placement` reports which execution provider ORT assigned nodes to
-// and `semantic-dtype` tries another quantization of the same model; both
-// need `semantic-debug`.
+// `semantic-placement` reports which execution provider ORT assigned nodes to,
+// `semantic-dtype` tries another quantization of the same model and
+// `semantic-matmul=cpu|gpu` forces where MatMulNBits runs; all need
+// `semantic-debug`.
 const debugParams = (() => {
   try {
     return new URLSearchParams(globalThis.location?.search ?? "");
@@ -508,6 +509,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         dtype: (semanticDebug && debugParams.get("semantic-dtype")) || meta.queryModel.dtype || "q4",
         debug: semanticDebug,
         placement: semanticDebug && debugParams.has("semantic-placement"),
+        matmul: semanticDebug ? (debugParams.get("semantic-matmul") ?? "") : "",
         dims: meta.dims,
         queryPrefix: meta.queryPrefix,
       });

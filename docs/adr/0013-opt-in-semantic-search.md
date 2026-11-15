@@ -32,6 +32,7 @@ PoC 評測的方式如下：
 - **揭露使用的模型**：對話框列出照片向量與查詢使用的模型、量化方式、固定 revision 與授權（Google EmbeddingGemma 2，Apache 2.0），內容取自部署的 `vectors/meta.json`。
 - **查詢不離開瀏覽器**：查詢文字只在瀏覽器內由 Web Worker 轉成向量，不送往任何第三方，也不送進 GA4。但模型與函式庫的下載請求會連到 huggingface.co 與 jsDelivr，這是使用者開啟前必須被告知的事實。
 - **文字語意搜尋只支援 WebGPU**：EmbeddingGemma 2 的 q4、q4f16、q8 模型都使用 `GatherBlockQuantized` 運算子，ORT-web 的 WASM 後端沒有這個實作；能在 WASM 執行的 fp16（約 542 MB）與 fp32（約 1 GB）太大，不適合讓瀏覽器下載。因此不支援 WebGPU 的瀏覽器，對話框會停用文字語意搜尋，只提供以圖找圖（以圖找圖只用圖片向量，不需要模型）。
+- **Mali GPU 的矩陣乘法改在 CPU 執行**：在 Mali GPU（WebGPU 廠商 `arm`）上，q4 矩陣乘法用 WebGPU 執行時每次查詢約 10 秒，改由 WASM 在 CPU 執行約 4 秒，其他節點仍在 WebGPU 上。量測方法與數字見 `docs/semantic-search-maintenance.md`。
 - **向量來源與格式**：由維護者在本機用 EmbeddingGemma 2 8-bit 產生文字向量與圖片向量，截斷到 512 維後以 int8 逐列量化。文字向量的輸入是相簿標題加 AI 視覺描述與場景、氛圍、用途標籤；圖片向量只使用 Flickr 縮圖。
 - **向量以不可變分段 commit 進 repo**：放在 `data/embeddings/`，只增量加入差異；同一張照片後面的分段覆蓋前面的。Pages build 讀取分段，依 `photos-index.json` 的列順序輸出成瀏覽器可直接使用的二進位檔。
 - **結果分頁**：開啟語意搜尋且有查詢時，結果分成「語意相近前 N 張」與「關鍵字命中」兩個分頁。關鍵字分頁完全維持原本行為；語意分頁套用其他篩選，但忽略排序選單。沒有向量的照片只會出現在關鍵字分頁。

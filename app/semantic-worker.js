@@ -1,6 +1,8 @@
 // Web Worker for opt-in semantic search. It loads only the text half of the
 // pinned EmbeddingGemma 2 ONNX model and turns query text into a normalized
 // vector. Queries never leave the browser; only model files are downloaded.
+import { onnxNodeNames, shouldRunMatMulOnCpu } from "./semantic-search.js";
+
 // Decoded size of ort-wasm-simd-threaded.asyncify.wasm for the onnxruntime-web
 // build that transformers.js 4.3.2 pins; only used to scale progress.
 const runtimeDecodedBytes = 26_861_777;
@@ -161,6 +163,24 @@ function installDebugCapture() {
   }
 }
 
+// The model graph without its weights is about 0.5 MB. Reading it before the
+// session lists the MatMulNBits nodes to run on the CPU; storing it under the
+// same URL lets transformers.js reuse it instead of downloading it again.
+async function matMulNodeNames({ modelId, revision, dtype }) {
+  const file = dtype === "fp32" ? "model.onnx" : `model_${dtype}.onnx`;
+  const url = `${modelHost}/${modelId}/resolve/${encodeURIComponent(revision)}/onnx/${file}`;
+  const cache = await caches.open(runtimeCacheName).catch(() => null);
+  let response = await cache?.match(url);
+  if (!response) {
+    response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`無法讀取模型結構：HTTP ${response.status}`);
+    }
+    await cache?.put(url, response.clone()).catch(() => {});
+  }
+  return onnxNodeNames(await response.arrayBuffer(), "MatMulNBits");
+}
+
 async function loadModel(message) {
   loadStartedAt = performance.now();
   settings = {
@@ -169,15 +189,18 @@ async function loadModel(message) {
     dtype: message.dtype || "q4",
     debug: Boolean(message.debug),
     placement: Boolean(message.placement),
+    matmul: String(message.matmul ?? ""),
     dims: Number(message.dims) || 512,
     queryPrefix: String(message.queryPrefix ?? ""),
   };
   if (typeof navigator === "undefined" || !navigator.gpu) {
     throw new Error("這個瀏覽器不支援 WebGPU，無法執行文字語意搜尋");
   }
+  let vendor = "";
   try {
     const adapter = await navigator.gpu.requestAdapter();
     const info = adapter?.info;
+    vendor = info?.vendor ?? "";
     timings.gpu = [info?.vendor, info?.architecture, info?.device].filter(Boolean).join("/");
     if (settings.debug && adapter) {
       timings.features = ["shader-f16", "subgroups", "timestamp-query"].filter((name) => adapter.features.has(name)).join("+") || "none";
@@ -212,11 +235,17 @@ async function loadModel(message) {
     return baseFetch(url, init);
   };
 
+  const cpuMatMul = shouldRunMatMulOnCpu({ vendor, override: settings.matmul });
+  timings.matmul = cpuMatMul ? "cpu" : "gpu";
+  const sessionOptionsPromise = cpuMatMul
+    ? matMulNodeNames(settings).then((names) => ({ executionProviders: [{ name: "webgpu", forceCpuNodeNames: names }] }))
+    : Promise.resolve({});
+
   const tokenizerPromise = AutoTokenizer.from_pretrained(settings.modelId, {
     revision: settings.revision,
     progress_callback: progressCallback,
   }).finally(() => mark("tokenizer"));
-  const modelPromise = configPromise.finally(() => mark("config")).then((config) =>
+  const modelPromise = Promise.all([configPromise.finally(() => mark("config")), sessionOptionsPromise]).then(([config, sessionOptions]) =>
     // WebGPU only: every quantized export uses GatherBlockQuantized, which the
     // ORT-web WASM backend does not implement.
     AutoModel.from_pretrained(settings.modelId, {
@@ -225,7 +254,7 @@ async function loadModel(message) {
       revision: settings.revision,
       device: "webgpu",
       progress_callback: modelProgressCallback(),
-      ...(settings.placement ? { session_options: { logSeverityLevel: 0, logVerbosityLevel: 1 } } : {}),
+      session_options: { ...sessionOptions, ...(settings.placement ? { logSeverityLevel: 0, logVerbosityLevel: 1 } : {}) },
     }),
   ).finally(() => mark("session"));
   [tokenizer, model] = await Promise.all([tokenizerPromise, modelPromise, runtimePromise]);
