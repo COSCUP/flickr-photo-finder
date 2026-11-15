@@ -29,7 +29,9 @@ export function parseVectorMeta(payload) {
   const dims = positiveInteger(payload.dims);
   const rowBytes = positiveInteger(payload.rowBytes);
   if (payload.formatVersion !== vectorFormatVersion) {
-    throw new Error(`不支援的向量格式：${payload.formatVersion ?? "未提供"}`);
+    // The service worker serves app code cache-first, so the first visit after
+    // a deploy can run old code against a newer meta.json.
+    throw new Error(`網站已更新，請重新整理頁面後再試（向量格式 ${payload.formatVersion ?? "未提供"}）`);
   }
   if (!dims || rowBytes !== dims + 4) {
     throw new Error("向量維度與每列大小不一致");

@@ -93,7 +93,7 @@ describe("semantic vector parsing", () => {
     assert.equal(parsed.sourceModel, "EmbeddingGemma 2 (8-bit, 768d truncated to 512d)");
     assert.equal(parseVectorMeta(meta({ sourceModel: undefined })).sourceModel, "");
     assert.throws(() => parseVectorMeta(meta({ rowBytes: 512 })), /每列大小/);
-    assert.throws(() => parseVectorMeta(meta({ formatVersion: "other" })), /不支援/);
+    assert.throws(() => parseVectorMeta(meta({ formatVersion: "other" })), /請重新整理頁面/);
     assert.throws(
       () => parseVectorMeta(meta({ sets: { image: { segments: [{ file: "segments/i.bin.gz", ids: "segments/i.ids.json", count: 2, bytes: 10, sha256: "b".repeat(64) }] } } })),
       /image 向量檔/,
