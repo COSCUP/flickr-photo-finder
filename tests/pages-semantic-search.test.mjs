@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  formatMegabytes,
   isModelCacheUrl,
   modelFileUrls,
   readSemanticPreference,
@@ -8,6 +9,7 @@ import {
 } from "../app/semantic-controller.js";
 import { matchesFilters } from "../app/search-sort.js";
 import {
+  assembleVectorRows,
   chooseQueryBackend,
   eligibilityMask,
   enterSimilarState,
@@ -59,17 +61,21 @@ function vectorSet(rows) {
 
 function meta(overrides = {}) {
   return {
-    formatVersion: "2026-11-embeddings-v1",
+    formatVersion: "2026-11-vector-segments-v1",
     dims: 512,
     rowBytes: 516,
-    rowCount: 3,
     queryPrefix: "task: search result | query: ",
     sourceModel: "EmbeddingGemma 2 (8-bit, 768d truncated to 512d)",
     queryModel: { id: "onnx-community/embeddinggemma-2-ONNX", revision: "abc", dtype: "q4" },
-    photosSha256: "f".repeat(64),
     sets: {
-      text: { file: "text-int8.bin", bytes: 1548, sha256: "a".repeat(64), covered: 2 },
-      image: { file: "image-int8.bin", bytes: 1548, sha256: "b".repeat(64), covered: 3 },
+      text: { covered: 2, segments: [{ file: "segments/t.bin.gz", ids: "segments/t.ids.json", count: 3, encoding: "gzip", bytes: 1548, transferBytes: 900, idsBytes: 30, sha256: "a".repeat(64) }] },
+      image: {
+        covered: 3,
+        segments: [
+          { file: "segments/i1.bin.gz", ids: "segments/i1.ids.json", count: 3, encoding: "gzip", bytes: 1548, transferBytes: 1000, idsBytes: 30, sha256: "b".repeat(64) },
+          { file: "segments/i2.bin.gz", ids: "segments/i2.ids.json", count: 1, bytes: 516, idsBytes: 10, sha256: "c".repeat(64) },
+        ],
+      },
     },
     ...overrides,
   };
@@ -78,17 +84,21 @@ function meta(overrides = {}) {
 describe("semantic vector parsing", () => {
   it("parses meta and rejects inconsistent sizes", () => {
     const parsed = parseVectorMeta(meta());
-    assert.equal(parsed.rowCount, 3);
-    assert.equal(parsed.sets.image.file, "image-int8.bin");
+    assert.deepEqual(parsed.sets.image.segments.map((segment) => [segment.file, segment.encoding, segment.transferBytes]), [
+      ["segments/i1.bin.gz", "gzip", 1000],
+      ["segments/i2.bin.gz", "", 516],
+    ]);
+    assert.equal(parsed.sets.image.transferBytes, 1000 + 30 + 516 + 10);
     assert.equal(parsed.queryModel.dtype, "q4");
     assert.equal(parsed.sourceModel, "EmbeddingGemma 2 (8-bit, 768d truncated to 512d)");
     assert.equal(parseVectorMeta(meta({ sourceModel: undefined })).sourceModel, "");
     assert.throws(() => parseVectorMeta(meta({ rowBytes: 512 })), /每列大小/);
     assert.throws(() => parseVectorMeta(meta({ formatVersion: "other" })), /不支援/);
     assert.throws(
-      () => parseVectorMeta(meta({ sets: { image: { file: "image-int8.bin", bytes: 10, sha256: "b".repeat(64) } } })),
+      () => parseVectorMeta(meta({ sets: { image: { segments: [{ file: "segments/i.bin.gz", ids: "segments/i.ids.json", count: 2, bytes: 10, sha256: "b".repeat(64) }] } } })),
       /image 向量檔/,
     );
+    assert.throws(() => parseVectorMeta(meta({ sets: { image: { segments: [] } } })), /image 向量檔/);
   });
 
   it("reads int8 rows with float32 scales and treats zero scale as missing", () => {
@@ -434,5 +444,37 @@ describe("encoded downloads", () => {
   it("rejects bodies larger or smaller than expected", async () => {
     await assert.rejects(readEncodedBody(chunked(await gzipBytes(payload)), { expectedBytes: payload.length - 1 }), /超出預期/);
     await assert.rejects(readEncodedBody(chunked(payload), { expectedBytes: payload.length + 1 }), /不完整/);
+  });
+});
+
+describe("vector segment assembly", () => {
+  const rowBytes = 3;
+  const rows = (...values) => Uint8Array.from(values.flat());
+
+  it("places rows by photo_id in index order and lets later segments win", () => {
+    const { data, covered } = assembleVectorRows({
+      photoIds: ["a", "b", "c", "d"],
+      rowBytes,
+      segments: [
+        { photoIds: ["c", "a", "x"], bytes: rows([3, 3, 3], [1, 1, 1], [9, 9, 9]) },
+        { photoIds: ["a"], bytes: rows([7, 7, 7]) },
+      ],
+    });
+    assert.deepEqual(Array.from(data), [7, 7, 7, 0, 0, 0, 3, 3, 3, 0, 0, 0]);
+    assert.equal(covered, 2);
+  });
+
+  it("rejects a segment whose rows and photo_ids disagree", () => {
+    assert.throws(() => assembleVectorRows({ photoIds: ["a"], rowBytes, segments: [{ photoIds: ["a", "b"], bytes: rows([1, 1, 1]) }] }), /不一致/);
+  });
+});
+
+describe("download size labels", () => {
+  it("keeps one decimal below 10 MB so small updates stay visible", () => {
+    assert.equal(formatMegabytes(120_989), "0.1 MB");
+    assert.equal(formatMegabytes(1_180_000), "1.2 MB");
+    assert.equal(formatMegabytes(5_395_427), "5.4 MB");
+    assert.equal(formatMegabytes(26_565_247), "27 MB");
+    assert.equal(formatMegabytes(0), "0.1 MB");
   });
 });

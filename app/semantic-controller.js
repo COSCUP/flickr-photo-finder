@@ -1,7 +1,7 @@
 // Opt-in semantic search lifecycle: consent dialog, downloads with progress,
 // Cache API reuse, the query worker, and the per-device enabled preference.
 // Ranking stays in semantic-search.js; this module owns network and storage.
-import { parseVectorMeta, parseVectorSet, readEncodedBody } from "./semantic-search.js";
+import { assembleVectorRows, parseVectorMeta, parseVectorSet, readEncodedBody } from "./semantic-search.js";
 
 export const semanticStorageKey = "coscup-photo-finder-semantic";
 // Must not start with "coscup-photo-finder-": the service worker deletes those
@@ -80,8 +80,10 @@ export function modelFileUrls({ id, revision }) {
   return modelCacheFiles.map((file) => `${modelHost}/${id}/resolve/${encodeURIComponent(revision)}/${file}`);
 }
 
+// One decimal below 10 MB so small segment updates do not read as "1 MB".
 export function formatMegabytes(bytes) {
-  return `${Math.max(1, Math.round(bytes / 1_000_000))} MB`;
+  const megabytes = bytes / 1_000_000;
+  return megabytes < 10 ? `${Math.max(0.1, Math.round(megabytes * 10) / 10)} MB` : `${Math.round(megabytes)} MB`;
 }
 
 // Full mode uses every vector set the deployment provides; image-only mode
@@ -154,7 +156,8 @@ function queryDom() {
   };
 }
 
-export function createSemanticController({ metaUrl = "", photoCount = 0, photosSha256 = "", trackEvent = () => {}, onChange = () => {} } = {}) {
+// `photoIds` is the photos-index order; vectors are matched to it by photo_id.
+export function createSemanticController({ metaUrl = "", photoIds = [], trackEvent = () => {}, onChange = () => {} } = {}) {
   const dom = queryDom();
   const available = Boolean(metaUrl) && Boolean(dom.bar) && typeof Worker !== "undefined";
   const state = {
@@ -177,7 +180,11 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
   const embeddings = new Map();
   // runtime is a 0–1 fraction (the worker counts decoded bytes). stage becomes
   // "initializing" when the model files are in and ORT builds the session.
-  const progress = { vectors: new Map(), model: new Map(), runtime: 0, stage: "", includeModel: false };
+  const progress = { vectors: new Map(), model: new Map(), runtime: 0, stage: "", includeModel: false, modelCached: false };
+  // What this browser already has for the deployed meta.json: bytes still
+  // missing per vector kind and whether the query model files are cached.
+  // The dialog lists and the progress bars count only what is missing.
+  let cacheInfo = null;
 
   // Readiness follows the last mode that finished loading, so an upgrade from
   // image-only to full keeps image similarity usable while it downloads.
@@ -219,19 +226,13 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       throw new Error(`無法讀取向量資訊：HTTP ${response.status}`);
     }
     const meta = parseVectorMeta(await response.json());
-    if (meta.rowCount !== photoCount) {
-      throw new Error("向量資料與照片索引的筆數不一致，請重新整理頁面");
-    }
-    if (photosSha256 && meta.photosSha256 && meta.photosSha256 !== photosSha256) {
-      throw new Error("向量資料與照片索引版本不一致，請重新整理頁面");
-    }
     state.meta = meta;
     renderSizes();
     return meta;
   }
 
-  function vectorUrl(set) {
-    return new URL(set.file, resolveMetaUrl()).toString();
+  function vectorUrl(path) {
+    return new URL(path, resolveMetaUrl()).toString();
   }
 
   // Query model download: weights from huggingface.co plus the tokenizer,
@@ -240,17 +241,30 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     return estimatedBytes.modelWeights + (state.meta?.queryModel.tokenizer?.transferBytes ?? estimatedBytes.tokenizer);
   }
 
-  function vectorCacheName(set) {
-    return `${vectorCachePrefix}${set.sha256}`;
+  // One cache per immutable segment, named by the sha256 of its rows, holding
+  // the decoded rows and its photo_id list. A new deployment reuses every
+  // segment the browser already has and downloads only the new ones.
+  function segmentCacheName(segment) {
+    return `${vectorCachePrefix}${segment.sha256}`;
   }
 
   // caches.open() would create an empty cache, so look it up with has() first.
-  async function cachedVector(set) {
-    if (!hasCacheApi() || !(await caches.has(vectorCacheName(set)))) {
+  async function cachedSegment(segment) {
+    if (!hasCacheApi() || !(await caches.has(segmentCacheName(segment)))) {
       return null;
     }
-    const cache = await caches.open(vectorCacheName(set));
-    return (await cache.match(vectorUrl(set))) ?? null;
+    const cache = await caches.open(segmentCacheName(segment));
+    const [rows, ids] = await Promise.all([cache.match(vectorUrl(segment.file)), cache.match(vectorUrl(segment.ids))]);
+    if (!rows || !ids) {
+      return null;
+    }
+    const bytes = new Uint8Array(await rows.arrayBuffer());
+    const photoIds = await ids.json();
+    return bytes.byteLength === segment.bytes && Array.isArray(photoIds) && photoIds.length === segment.count ? { bytes, photoIds } : null;
+  }
+
+  function allSegments(meta) {
+    return Object.values(meta.sets).flatMap((set) => set.segments);
   }
 
   async function modelCacheEntries(modelId) {
@@ -291,12 +305,8 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       return;
     }
     try {
-      await Promise.all(
-        run.kinds
-          .map((kind) => run.meta.sets[kind])
-          .filter(Boolean)
-          .map((set) => caches.delete(vectorCacheName(set))),
-      );
+      // Only segments this run stored; ones cached before it stay usable.
+      await Promise.all([...run.storedSegments].map((name) => caches.delete(name)));
       if (run.includeModel) {
         const { cache, requests } = await modelCacheEntries(run.meta.queryModel.id);
         await Promise.all(requests.map((request) => cache.delete(request)));
@@ -319,6 +329,21 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     return matches.every(Boolean);
   }
 
+  async function segmentCacheState(meta, mode) {
+    let missingBytes = 0;
+    let cachedSegments = 0;
+    for (const kind of setsForMode(mode, meta)) {
+      for (const segment of meta.sets[kind]?.segments ?? []) {
+        if (await cachedSegment(segment)) {
+          cachedSegments += 1;
+        } else {
+          missingBytes += segment.transferBytes + segment.idsBytes;
+        }
+      }
+    }
+    return { missingBytes, cachedSegments };
+  }
+
   async function allAssetsCached(meta, mode) {
     const kinds = setsForMode(mode, meta);
     if (kinds.length === 0) {
@@ -326,63 +351,84 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     }
     for (const kind of kinds) {
       const set = meta.sets[kind];
-      if (!set || !(await cachedVector(set))) {
-        return false;
+      for (const segment of set?.segments ?? [null]) {
+        if (!segment || !(await cachedSegment(segment))) {
+          return false;
+        }
       }
     }
     return mode === "full" ? modelFilesCached(meta) : true;
   }
 
-  async function loadVectorSet(meta, kind, { allowNetwork, signal, token }) {
+  async function downloadSegment(segment, { signal, token, run, onProgress }) {
+    const [rows, ids] = await Promise.all([
+      fetch(vectorUrl(segment.file), { signal, cache: "no-store" }),
+      fetch(vectorUrl(segment.ids), { signal, cache: "no-store" }),
+    ]);
+    if (!rows.ok || !ids.ok) {
+      throw new Error(`無法下載向量：HTTP ${rows.ok ? ids.status : rows.status}`);
+    }
+    const [bytes, photoIds] = await Promise.all([readEncodedBody(rows, { expectedBytes: segment.bytes, onProgress }), ids.json()]);
+    const digest = await sha256Hex(bytes);
+    if (digest && digest !== segment.sha256) {
+      throw new Error("向量檔內容與 sha256 不符");
+    }
+    if (!Array.isArray(photoIds) || photoIds.length !== segment.count) {
+      throw new Error("向量分段的 photo_id 清單不正確");
+    }
+    if (token !== runToken) {
+      throw new CancelledError();
+    }
+    if (hasCacheApi()) {
+      const name = segmentCacheName(segment);
+      try {
+        // Start from an empty cache so entries under other URLs never linger.
+        await caches.delete(name);
+        const cache = await caches.open(name);
+        run?.storedSegments.add(name);
+        await cache.put(vectorUrl(segment.file), new Response(bytes, { headers: { "content-type": "application/octet-stream", "content-length": String(bytes.byteLength) } }));
+        await cache.put(vectorUrl(segment.ids), new Response(JSON.stringify(photoIds), { headers: { "content-type": "application/json" } }));
+        if (token !== runToken) {
+          throw new CancelledError();
+        }
+      } catch (error) {
+        if (isCancelled(error)) {
+          throw error;
+        }
+        // Quota errors only cost a re-download next time.
+      }
+    }
+    return { bytes, photoIds };
+  }
+
+  // Merges a kind's segments in order; cached segments are reused and only the
+  // missing ones are downloaded. Progress counts transfer bytes.
+  async function loadVectorSet(meta, kind, { allowNetwork, signal, token, run }) {
     const set = meta.sets[kind];
     if (!set) {
       throw new Error(`這次部署沒有 ${kind === "text" ? "文字" : "圖片"} 向量`);
     }
-    const onProgress = (loaded) => {
-      progress.vectors.set(kind, { loaded, total: set.transferBytes });
+    const segments = await Promise.all(set.segments.map((segment) => cachedSegment(segment)));
+    const total = set.segments.reduce((sum, segment, index) => sum + (segments[index] ? 0 : segment.transferBytes + segment.idsBytes), 0);
+    let done = 0;
+    const report = (current) => {
+      progress.vectors.set(kind, { loaded: Math.min(done + current, total), total });
       renderProgress();
     };
-    let bytes;
-    const cached = await cachedVector(set);
-    if (cached) {
-      bytes = new Uint8Array(await cached.arrayBuffer());
-      onProgress(set.transferBytes);
-    } else {
+    report(0);
+    for (const [index, segment] of set.segments.entries()) {
+      if (segments[index]) {
+        continue;
+      }
       if (!allowNetwork) {
         throw new Error("需要重新下載");
       }
-      const response = await fetch(vectorUrl(set), { signal, cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`無法下載向量：HTTP ${response.status}`);
-      }
-      bytes = await readEncodedBody(response, { expectedBytes: set.bytes, onProgress });
-      const digest = await sha256Hex(bytes);
-      if (digest && digest !== set.sha256) {
-        throw new Error("向量檔內容與 sha256 不符");
-      }
-      if (token !== runToken) {
-        throw new CancelledError();
-      }
-      if (hasCacheApi()) {
-        try {
-          const cache = await caches.open(vectorCacheName(set));
-          await cache.put(
-            vectorUrl(set),
-            new Response(bytes, { headers: { "content-type": "application/octet-stream", "content-length": String(bytes.byteLength) } }),
-          );
-          if (token !== runToken) {
-            await caches.delete(vectorCacheName(set));
-            throw new CancelledError();
-          }
-        } catch (error) {
-          if (isCancelled(error)) {
-            throw error;
-          }
-          // Quota errors only cost a re-download next time.
-        }
-      }
+      segments[index] = await downloadSegment(segment, { signal, token, run, onProgress: report });
+      done += segment.transferBytes + segment.idsBytes;
+      report(0);
     }
-    return parseVectorSet(bytes, meta);
+    const { data } = assembleVectorRows({ segments, photoIds, rowBytes: meta.rowBytes });
+    return parseVectorSet(data, { dims: meta.dims, rowBytes: meta.rowBytes, rowCount: photoIds.length });
   }
 
   function rejectPendingEmbeddings(message) {
@@ -457,7 +503,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         modelId: meta.queryModel.id,
         revision: meta.queryModel.revision,
         dtype: (semanticDebug && debugParams.get("semantic-dtype")) || meta.queryModel.dtype || "q4",
-        tokenizer: meta.queryModel.tokenizer ? { ...meta.queryModel.tokenizer, url: vectorUrl(meta.queryModel.tokenizer) } : null,
+        tokenizer: meta.queryModel.tokenizer ? { ...meta.queryModel.tokenizer, url: vectorUrl(meta.queryModel.tokenizer.file) } : null,
         debug: semanticDebug,
         placement: semanticDebug && debugParams.has("semantic-placement"),
         backend: semanticDebug ? (debugParams.get("semantic-backend") ?? "") : "",
@@ -467,12 +513,27 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     });
   }
 
-  function resetProgress(mode, kinds) {
-    progress.vectors = new Map(kinds.map((kind) => [kind, { loaded: 0, total: state.meta?.sets[kind]?.transferBytes ?? estimatedBytes.vectorSet }]));
+  function resetProgress(mode, kinds, { modelCached = false } = {}) {
+    progress.vectors = new Map(kinds.map((kind) => [kind, { loaded: 0, total: 0 }]));
     progress.model = new Map();
     progress.runtime = 0;
     progress.stage = "";
     progress.includeModel = mode === "full";
+    progress.modelCached = modelCached;
+  }
+
+  async function refreshCacheInfo(meta) {
+    const missing = {};
+    for (const kind of Object.keys(meta.sets)) {
+      missing[kind] = 0;
+      for (const segment of meta.sets[kind].segments) {
+        if (!(await cachedSegment(segment))) {
+          missing[kind] += segment.transferBytes + segment.idsBytes;
+        }
+      }
+    }
+    cacheInfo = { missing, modelCached: await modelFilesCached(meta).catch(() => false) };
+    return cacheInfo;
   }
 
   // Loads every asset a mode needs. With allowNetwork false (automatic restore
@@ -499,13 +560,13 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         throw new Error("這次部署沒有可用的照片向量");
       }
       const kinds = setsForMode(mode, meta).filter((kind) => !state.sets[kind]);
-      run = { meta, kinds, includeModel: mode === "full" && !workerReady, previousSets: previous.sets };
+      run = { meta, kinds, includeModel: mode === "full" && !workerReady, previousSets: previous.sets, storedSegments: new Set() };
       currentRun = run;
-      resetProgress(mode, kinds);
+      resetProgress(mode, kinds, { modelCached: mode === "full" && (await modelFilesCached(meta).catch(() => false)) });
       renderProgress();
       stage = "assets";
       const vectorJobs = kinds.map((kind) =>
-        loadVectorSet(meta, kind, { allowNetwork, signal, token }).then((set) => {
+        loadVectorSet(meta, kind, { allowNetwork, signal, token, run }).then((set) => {
           if (token === runToken) {
             state.sets = { ...state.sets, [kind]: set };
           }
@@ -531,6 +592,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         semantic_mode: mode,
         from_cache: !allowNetwork,
       });
+      cacheInfo = null;
       cleanupStaleVectorCaches(meta);
       if (allowNetwork && dom.dialog?.open) {
         dom.dialog.close();
@@ -584,7 +646,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       return;
     }
     try {
-      const keep = new Set(Object.values(meta.sets).map((set) => vectorCacheName(set)));
+      const keep = new Set(allSegments(meta).map((segment) => segmentCacheName(segment)));
       const names = await caches.keys();
       await Promise.all(names.filter((name) => name.startsWith(vectorCachePrefix) && !keep.has(name)).map((name) => caches.delete(name)));
     } catch {
@@ -607,6 +669,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
 
   async function clearDownloadedData() {
     disable();
+    cacheInfo = null;
     if (hasCacheApi()) {
       try {
         const names = await caches.keys();
@@ -666,7 +729,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       modelLoaded += item.loaded;
       modelTotal += item.total;
     }
-    if (progress.includeModel) {
+    if (progress.includeModel && !progress.modelCached) {
       modelTotal = workerReady ? modelLoaded || modelTotal : Math.max(modelTotal, modelEstimate());
       if (workerReady) {
         modelLoaded = modelTotal;
@@ -694,9 +757,18 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     }
     const totals = progressTotals();
     setProgress(dom.progressVectors, dom.progressVectorsText, totals.vectorLoaded, totals.vectorTotal);
+    if (totals.vectorTotal === 0) {
+      setProgress(dom.progressVectors, null, 1, 1);
+      dom.progressVectorsText.textContent = "已下載";
+    }
     dom.progressModelRow.hidden = !progress.includeModel;
     dom.progressRuntimeRow.hidden = !progress.includeModel;
-    if (progress.includeModel) {
+    if (progress.includeModel && progress.modelCached) {
+      setProgress(dom.progressModel, null, 1, 1);
+      dom.progressModelText.textContent = "已下載";
+      setProgress(dom.progressRuntime, null, 1, 1);
+      dom.progressRuntimeText.textContent = "已下載";
+    } else if (progress.includeModel) {
       setProgress(dom.progressModel, dom.progressModelText, totals.modelLoaded, totals.modelTotal);
       setProgress(dom.progressRuntime, null, progress.runtime, 1);
       dom.progressRuntimeText.textContent = progress.runtime >= 1 ? "完成" : `${Math.floor(progress.runtime * 100)}%`;
@@ -710,22 +782,29 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
       }
     }
     setProgress(dom.progressTotal, dom.progressTotalText, totals.loaded, totals.total);
+    if (totals.total === 0) {
+      setProgress(dom.progressTotal, null, 1, 1);
+      dom.progressTotalText.textContent = "已下載";
+    }
     if (state.status === "downloading" || state.status === "loading") {
       renderBar();
     }
   }
 
+  // Sizes list only what this browser still has to download.
   function renderSizes() {
     const sets = state.meta?.sets;
-    const vectorBytes = sets
-      ? Object.values(sets).reduce((total, set) => total + set.transferBytes, 0)
-      : estimatedBytes.vectorSet * 2;
-    const imageBytes = sets?.image?.transferBytes ?? estimatedBytes.vectorSet;
-    dom.sizeVectors.textContent = `約 ${formatMegabytes(vectorBytes)}`;
-    dom.sizeModel.textContent = `約 ${formatMegabytes(modelEstimate())}`;
-    dom.sizeRuntime.textContent = `約 ${formatMegabytes(estimatedBytes.runtime)}`;
-    dom.sizeTotal.textContent = `約 ${formatMegabytes(vectorBytes + modelEstimate() + estimatedBytes.runtime)}`;
-    dom.enableImage.textContent = `只下載以圖找圖（約 ${formatMegabytes(imageBytes)}）`;
+    const missingOf = (kind) => cacheInfo?.missing[kind] ?? sets?.[kind]?.transferBytes ?? estimatedBytes.vectorSet;
+    const vectorBytes = sets ? Object.keys(sets).reduce((total, kind) => total + missingOf(kind), 0) : estimatedBytes.vectorSet * 2;
+    const imageBytes = missingOf("image");
+    const modelBytes = cacheInfo?.modelCached ? 0 : modelEstimate();
+    const runtimeBytes = cacheInfo?.modelCached ? 0 : estimatedBytes.runtime;
+    const size = (bytes) => (bytes > 0 ? `約 ${formatMegabytes(bytes)}` : "已下載");
+    dom.sizeVectors.textContent = size(vectorBytes);
+    dom.sizeModel.textContent = size(modelBytes);
+    dom.sizeRuntime.textContent = size(runtimeBytes);
+    dom.sizeTotal.textContent = size(vectorBytes + modelBytes + runtimeBytes);
+    dom.enableImage.textContent = imageBytes > 0 ? `只下載以圖找圖（約 ${formatMegabytes(imageBytes)}）` : "只開啟以圖找圖";
     renderModelInfo();
   }
 
@@ -766,7 +845,7 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
         }
         return `${state.message ? `${state.message} ` : ""}以圖找圖已開啟：在照片預覽按「找相似照片」。文字語意搜尋尚未下載。`;
       case "needs-download":
-        return "語意搜尋的資料已不在瀏覽器中，需要重新下載。";
+        return state.message || "語意搜尋的資料已不在瀏覽器中，需要重新下載。";
       case "error":
         return state.message || "語意搜尋載入失敗。";
       default:
@@ -827,7 +906,8 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     renderBar();
     const focusTarget = preferImage && !dom.enableImage.hidden ? dom.enableImage : null;
     (focusTarget ?? dom.dismiss).focus({ preventScroll: true });
-    loadMeta().then(() => {
+    loadMeta().then(async (meta) => {
+      await refreshCacheInfo(meta).catch(() => {});
       renderSizes();
       renderDialog();
       onChange();
@@ -852,7 +932,12 @@ export function createSemanticController({ metaUrl = "", photoCount = 0, photosS
     try {
       const meta = await loadMeta();
       if (!(await allAssetsCached(meta, preference))) {
-        setStatus("needs-download");
+        // A deployment that only added vector segments needs a small update,
+        // not a full download; say how much so the visitor can decide.
+        const { missingBytes, cachedSegments } = await segmentCacheState(meta, preference);
+        const modelReady = preference !== "full" || (await modelFilesCached(meta));
+        const update = modelReady && cachedSegments > 0;
+        setStatus("needs-download", update ? `語意搜尋資料有更新，需要下載約 ${formatMegabytes(missingBytes)}。` : "");
         return;
       }
     } catch (error) {

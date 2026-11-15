@@ -33,7 +33,7 @@ PoC 評測的方式如下：
 - **查詢不離開瀏覽器**：查詢文字只在瀏覽器內由 Web Worker 轉成向量，不送往任何第三方，也不送進 GA4。但模型與函式庫的下載請求會連到 huggingface.co 與 jsDelivr，這是使用者開啟前必須被告知的事實。
 - **查詢模型的執行後端：WebGPU 優先，其餘用 WASM**：沒有可用的 WebGPU adapter，或 GPU 廠商是 `arm`（Mali）時，改用 ORT-web 的 WASM 後端在 CPU 執行。量化模型用到 WASM 後端沒有實作的 `GatherBlockQuantized`，worker 會在建立 session 前，把模型結構（約 0.5 MB）裡這個節點改寫成標準運算子，權重檔不變，結果與原運算子完全相同。實測每次查詢：Mac（Apple GPU、WebGPU）約 25 ms；Pixel 8 Pro（Mali）用 WebGPU 約 10 秒、用 WASM 不到 1 秒。
 - **向量來源與格式**：由維護者在本機用 EmbeddingGemma 2 8-bit 產生文字向量與圖片向量，截斷到 512 維後以 int8 逐列量化。文字向量的輸入是相簿標題加 AI 視覺描述與場景、氛圍、用途標籤；圖片向量只使用 Flickr 縮圖。
-- **向量以不可變分段 commit 進 repo**：放在 `data/embeddings/`，只增量加入差異；同一張照片後面的分段覆蓋前面的。Pages build 讀取分段，依 `photos-index.json` 的列順序輸出成瀏覽器可直接使用的二進位檔。
+- **向量以不可變分段 commit 進 repo，瀏覽器也以分段下載**：放在 `data/embeddings/`，只增量加入差異；同一張照片後面的分段覆蓋前面的。Pages build 把分段原樣（gzip）放進 artifact，瀏覽器依 photo_id 組成 `photos-index.json` 列順序的向量，並依 sha256 各自快取分段。新增一場活動（約 1,500 張）只需下載約 1.2 MB，AI 重新描述 2,000 張約 0.8 MB，不必重新下載整份約 27 MB 的向量；只有維護者執行 `--compact` 合併分段時，所有人才需要完整重新下載一次。
 - **結果分頁**：開啟語意搜尋且有查詢時，結果分成「語意相近前 N 張」與「關鍵字命中」兩個分頁。關鍵字分頁完全維持原本行為；語意分頁套用其他篩選，但忽略排序選單。沒有向量的照片只會出現在關鍵字分頁。
 - **以圖找圖**：在預覽對話框以單張照片的圖片向量排名相似照片，只用圖片向量，不需要載入文字模型。
 - **沒有向量就隱藏入口**：`data/embeddings/` 不存在或沒有分段時，build 不產生向量，前端不顯示任何語意搜尋入口。

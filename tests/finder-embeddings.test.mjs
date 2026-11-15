@@ -41,9 +41,11 @@ function rowFor(seed) {
   return quantizeEmbedding(seededVector(seed));
 }
 
-function segment(kind, photoIds, seeds, textHashes = []) {
+function segment(kind, photoIds, seeds, textHashes = [], name = `20261114-0000-${kind}`) {
   return {
     kind,
+    file: `segments/${name}.bin`,
+    ids: `segments/${name}.json`,
     photoIds,
     textHashes,
     data: Buffer.concat(seeds.map(rowFor)),
@@ -205,28 +207,34 @@ describe("finder embedding Pages artifact", () => {
     assert.deepEqual(data.subarray(2 * embeddingRowBytes), rowFor(3));
   });
 
-  it("builds gzip-encoded rowCount x 516 byte sets and skips kinds without segments", () => {
+  it("ships each repo segment gzipped with its photo_ids and skips kinds without segments", () => {
     const payloads = buildFinderVectorPayloads({
-      segments: [segment("text", ["p2"], [2], ["h2"])],
+      segments: [segment("text", ["p2", "p9"], [2, 9], ["h2", "h9"], "a-text"), segment("text", ["p3", "p2"], [3, 4], ["h3", "h2b"], "b-text")],
       photoIds: ["p1", "p2", "p3", "p4"],
-      photosSha256: "abc",
     });
-    assert.equal(payloads.meta.rowCount, 4);
-    assert.equal(payloads.meta.photosSha256, "abc");
+    assert.equal(payloads.meta.formatVersion, "2026-11-vector-segments-v1");
+    assert.equal(payloads.meta.rowCount, undefined);
     assert.match(payloads.meta.sourceModel, /^EmbeddingGemma 2 /);
     assert.deepEqual(Object.keys(payloads.meta.sets), ["text"]);
     const set = payloads.meta.sets.text;
-    assert.equal(set.file, "text-int8.bin.gz");
-    assert.equal(set.encoding, "gzip");
-    assert.equal(set.bytes, 4 * 516);
-    const compressed = payloads.files["text-int8.bin.gz"];
-    assert.equal(set.transferBytes, compressed.length);
-    const decoded = gunzipSync(compressed);
-    assert.equal(decoded.length, set.bytes);
-    assert.equal(set.sha256, sha256Hex(decoded));
-    assert.equal(set.covered, 1);
+    // p2 and p3 are in photos-index; p9 is not. Later segments override.
+    assert.equal(set.covered, 2);
+    assert.deepEqual(set.segments.map((entry) => [entry.file, entry.ids, entry.count]), [
+      ["segments/a-text.bin.gz", "segments/a-text.ids.json", 2],
+      ["segments/b-text.bin.gz", "segments/b-text.ids.json", 2],
+    ]);
+    const [first] = set.segments;
+    assert.equal(first.encoding, "gzip");
+    assert.equal(first.bytes, 2 * 516);
+    const decoded = gunzipSync(payloads.files[first.file]);
+    assert.deepEqual(decoded, Buffer.concat([rowFor(2), rowFor(9)]));
+    assert.equal(first.sha256, sha256Hex(decoded));
+    assert.equal(first.transferBytes, payloads.files[first.file].length);
+    assert.deepEqual(JSON.parse(payloads.files[first.ids]), ["p2", "p9"]);
+    assert.equal(first.idsBytes, payloads.files[first.ids].length);
+    assert.equal(set.transferBytes, set.segments.reduce((total, entry) => total + entry.transferBytes + entry.idsBytes, 0));
     assert.equal(payloads.meta.queryModel.tokenizer, undefined);
-    assert.equal(buildFinderVectorPayloads({ segments: [], photoIds: ["p1"], photosSha256: "abc" }), null);
+    assert.equal(buildFinderVectorPayloads({ segments: [], photoIds: ["p1"] }), null);
   });
 });
 
@@ -241,7 +249,7 @@ describe("query vocabulary", () => {
       transferBytes: vocabulary.length,
       sha256: embeddingQueryVocabulary.sha256,
     });
-    const payloads = buildFinderVectorPayloads({ segments: [segment("image", ["p1"], [1])], photoIds: ["p1"], photosSha256: "abc", vocabulary });
+    const payloads = buildFinderVectorPayloads({ segments: [segment("image", ["p1"], [1])], photoIds: ["p1"], vocabulary });
     assert.deepEqual(payloads.meta.queryModel.tokenizer, entry);
     assert.equal(payloads.files[embeddingQueryVocabulary.file], vocabulary);
     assert.throws(() => checkQueryVocabulary(gzipSync(Buffer.from("{}"))), /does not match the pinned/);

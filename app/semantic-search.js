@@ -3,7 +3,7 @@
 // This module must not touch the DOM, network, or storage; callers pass parsed
 // vector sets, query vectors, model bytes and eligibility masks explicitly.
 
-export const vectorFormatVersion = "2026-11-embeddings-v1";
+export const vectorFormatVersion = "2026-11-vector-segments-v1";
 export const vectorSetKinds = ["text", "image"];
 
 // Sort keys pack a quantized score and the row index into one float64 so that
@@ -18,21 +18,21 @@ function positiveInteger(value) {
   return Number.isInteger(number) && number > 0 ? number : 0;
 }
 
+// meta.json lists, per vector kind, the immutable segments to merge in order
+// (later segments override earlier ones for the same photo_id). Rows are
+// mapped to photos-index rows by photo_id in the browser, so vectors do not
+// depend on the photo order of a deployment.
 export function parseVectorMeta(payload) {
   if (!payload || typeof payload !== "object") {
     throw new Error("向量 meta 格式不正確");
   }
   const dims = positiveInteger(payload.dims);
   const rowBytes = positiveInteger(payload.rowBytes);
-  const rowCount = positiveInteger(payload.rowCount);
   if (payload.formatVersion !== vectorFormatVersion) {
     throw new Error(`不支援的向量格式：${payload.formatVersion ?? "未提供"}`);
   }
   if (!dims || rowBytes !== dims + 4) {
     throw new Error("向量維度與每列大小不一致");
-  }
-  if (!rowCount || rowCount > maxVectorRows) {
-    throw new Error("向量列數不正確");
   }
   const sets = {};
   for (const kind of vectorSetKinds) {
@@ -40,16 +40,29 @@ export function parseVectorMeta(payload) {
     if (!set) {
       continue;
     }
-    const bytes = positiveInteger(set.bytes);
-    if (!set.file || bytes !== rowCount * rowBytes || !/^[0-9a-f]{64}$/.test(String(set.sha256 ?? ""))) {
+    const segments = (Array.isArray(set.segments) ? set.segments : []).map((segment) => {
+      const count = positiveInteger(segment.count);
+      const bytes = positiveInteger(segment.bytes);
+      if (!segment.file || !segment.ids || !count || count > maxVectorRows || bytes !== count * rowBytes || !/^[0-9a-f]{64}$/.test(String(segment.sha256 ?? ""))) {
+        throw new Error(`${kind} 向量檔資訊不正確`);
+      }
+      return {
+        file: String(segment.file),
+        ids: String(segment.ids),
+        count,
+        bytes,
+        ...encodedTransfer(segment, bytes),
+        idsBytes: positiveInteger(segment.idsBytes),
+        sha256: String(segment.sha256),
+      };
+    });
+    if (segments.length === 0) {
       throw new Error(`${kind} 向量檔資訊不正確`);
     }
     sets[kind] = {
       kind,
-      file: String(set.file),
-      bytes,
-      ...encodedTransfer(set, bytes),
-      sha256: String(set.sha256),
+      segments,
+      transferBytes: segments.reduce((total, segment) => total + segment.transferBytes + segment.idsBytes, 0),
       covered: Number(set.covered) || 0,
     };
   }
@@ -58,7 +71,6 @@ export function parseVectorMeta(payload) {
     formatVersion: payload.formatVersion,
     dims,
     rowBytes,
-    rowCount,
     queryPrefix: String(payload.queryPrefix ?? ""),
     sourceModel: String(payload.sourceModel ?? ""),
     queryModel: {
@@ -67,9 +79,34 @@ export function parseVectorMeta(payload) {
       dtype: String(payload.queryModel?.dtype ?? ""),
       ...(tokenizer ? { tokenizer } : {}),
     },
-    photosSha256: String(payload.photosSha256 ?? ""),
     sets,
   };
+}
+
+// Builds the row-ordered vector buffer for `photoIds` (photos-index order)
+// from segments [{ photoIds, bytes }] given in merge order. Photos without a
+// vector stay zero, which parseVectorSet reads as missing. Returns the bytes
+// and how many photos have a vector.
+export function assembleVectorRows({ segments, photoIds, rowBytes }) {
+  const rowOf = new Map();
+  photoIds.forEach((photoId, row) => {
+    rowOf.set(String(photoId), row);
+  });
+  const data = new Uint8Array(photoIds.length * rowBytes);
+  const filled = new Uint8Array(photoIds.length);
+  for (const segment of segments) {
+    if (segment.bytes.byteLength !== segment.photoIds.length * rowBytes) {
+      throw new Error("向量分段大小與 photo_id 數量不一致");
+    }
+    segment.photoIds.forEach((photoId, index) => {
+      const row = rowOf.get(String(photoId));
+      if (row !== undefined) {
+        data.set(segment.bytes.subarray(index * rowBytes, (index + 1) * rowBytes), row * rowBytes);
+        filled[row] = 1;
+      }
+    });
+  }
+  return { data, covered: filled.reduce((total, value) => total + value, 0) };
 }
 
 // Files may ship gzip-encoded; `bytes` and `sha256` always describe the decoded

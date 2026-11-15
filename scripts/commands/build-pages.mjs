@@ -286,7 +286,6 @@ async function buildStaticFinderData({ albumsCsvUrl, embeddingsDir, outputDir, p
     embeddingsDir,
     finderDataDir,
     photoIds: payloads.photos.map((photo) => photo.photo_id),
-    photosSha256: payloads.manifest.source.photosSha256,
   });
   return { manifest: payloads.manifest, vectorsMeta };
 }
@@ -468,7 +467,7 @@ async function main() {
     console.log(`Static photos: ${result.staticManifest.rowCount}`);
     console.log(`Static shards: ${result.staticManifest.shards.length}`);
     if (result.vectorsMeta) {
-      const sets = Object.entries(result.vectorsMeta.sets).map(([kind, set]) => `${kind} ${set.covered}/${result.vectorsMeta.rowCount}`);
+      const sets = Object.entries(result.vectorsMeta.sets).map(([kind, set]) => `${kind} ${set.covered}/${result.staticManifest.rowCount} (${set.segments.length} segment${set.segments.length === 1 ? "" : "s"})`);
       console.log(`Semantic vectors: ${sets.join(", ")}`);
     } else {
       console.log("Semantic vectors: skipped (no embedding segments)");

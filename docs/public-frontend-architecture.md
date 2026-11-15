@@ -124,7 +124,7 @@ GitHub Pages Finder 可以註冊 service worker，讓已開啟過的公開搜尋
 ### 資料流
 
 1. 維護者在本機用 `pnpm finder:embed` 產生向量分段，放在 `data/embeddings/`。
-2. `pnpm finder:build` 讀取分段，依 `photos-index.json` 的列順序，輸出 `data/finder-data/vectors/`：`meta.json`、`text-int8.bin.gz`、`image-int8.bin.gz`，以及 tokenizer 的 gzip 檔 `query-vocabulary.json.gz`。Pages 不壓縮 `.bin`，所以向量以 gzip 檔傳送，瀏覽器用 `DecompressionStream` 解壓；`meta.json` 的 `bytes` 與 `sha256` 描述解壓後的內容，`transferBytes` 是下載大小。解壓後每列 516 bytes：512 個 int8 加上 1 個 float32 scale；scale 為 0 表示該照片沒有這種向量。
+2. `pnpm finder:build` 把 repo 的每個分段原樣放進 `data/finder-data/vectors/segments/`：列資料以 gzip 傳送（`<分段>.bin.gz`，Pages 不壓縮 `.bin`，瀏覽器用 `DecompressionStream` 解壓），photo_id 清單是 `<分段>.ids.json`。`meta.json` 依合併順序列出每種向量的分段，`bytes` 與 `sha256` 描述解壓後的列資料，`transferBytes` 是下載大小；tokenizer 的 gzip 檔 `query-vocabulary.json.gz` 也放在同一個目錄。瀏覽器以 photo_id 把各分段的列放到 `photos-index.json` 對應的列，後面的分段覆蓋前面的；每個分段依 sha256 各自快取，新部署只需要下載瀏覽器還沒有的分段，新增照片而沒有新向量時則完全不用下載。每列 516 bytes：512 個 int8 加上 1 個 float32 scale；scale 為 0 表示該照片沒有這種向量。
 3. 使用者在對話框確認後，前端下載向量、模型與函式庫：向量來自 Pages，模型權重來自 huggingface.co（固定 revision），tokenizer 來自本站，transformers.js 與 WASM 來自 jsDelivr（固定 4.3.2）。所有 Hugging Face 請求都固定在同一個 revision，包含 tokenizer 的預檢。
 4. 查詢文字在 `semantic-worker.js`（Web Worker）內轉成向量，主執行緒以 `semantic-search.js` 對照片向量做 cosine 排名，再以 RRF 合併文字與圖片排名。查詢文字與向量不離開瀏覽器。
 

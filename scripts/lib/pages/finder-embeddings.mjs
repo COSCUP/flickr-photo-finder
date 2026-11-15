@@ -1,11 +1,10 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import {
   buildVectorRows,
   defaultEmbeddingsDir,
   embeddingDims,
-  embeddingFormatVersion,
   embeddingKinds,
   embeddingQueryModel,
   embeddingQueryPrefix,
@@ -19,14 +18,6 @@ import {
 
 export const finderVectorsDir = "vectors";
 
-// Pages serves .bin files uncompressed, so vector sets ship gzipped (about 25%
-// smaller) and the browser decodes them with DecompressionStream. sha256 and
-// bytes always describe the decoded data; transferBytes is the .gz size.
-function gzipEntry(file, data) {
-  const compressed = gzipSync(data, { level: 9 });
-  return { entry: { file, encoding: "gzip", bytes: data.length, transferBytes: compressed.length, sha256: sha256Hex(data) }, compressed };
-}
-
 // Verifies the repo's gzipped query vocabulary against the pinned tokenizer.
 export function checkQueryVocabulary(compressed) {
   const decoded = gunzipSync(compressed);
@@ -36,10 +27,23 @@ export function checkQueryVocabulary(compressed) {
   return { file: embeddingQueryVocabulary.file, encoding: "gzip", bytes: decoded.length, transferBytes: compressed.length, sha256: embeddingQueryVocabulary.sha256 };
 }
 
-// Builds vectors/{meta.json,<kind>-int8.bin.gz} payloads in photos-index row
-// order, plus the query vocabulary when the repo has it. Returns null when
-// there are no embedding segments, so the build skips vectors.
-export function buildFinderVectorPayloads({ segments, photoIds, photosSha256, vocabulary = null }) {
+// The browser receives the repo's immutable segments as they are, so a new
+// deployment only costs the segments a visitor does not have yet. Pages
+// serves .bin files uncompressed, so each segment ships gzipped (about 25%
+// smaller) and is decoded with DecompressionStream; its photo_ids ship as
+// JSON. sha256 and bytes describe the decoded rows, transferBytes the .gz.
+// `covered` counts photos-index rows that end up with a vector after merging
+// (later segments override earlier ones), for the dialog and finder:check.
+export const vectorsMetaFormatVersion = "2026-11-vector-segments-v1";
+
+export function segmentArtifactFiles(segment) {
+  return { file: `${segment.file}.gz`, ids: segment.ids.replace(/\.json$/, ".ids.json") };
+}
+
+// Builds vectors/{meta.json,segments/*} payloads plus the query vocabulary
+// when the repo has it. Returns null when there are no embedding segments, so
+// the build skips vectors.
+export function buildFinderVectorPayloads({ segments, photoIds, vocabulary = null }) {
   if (segments.length === 0) {
     return null;
   }
@@ -47,23 +51,38 @@ export function buildFinderVectorPayloads({ segments, photoIds, photosSha256, vo
   const sets = {};
   const files = {};
   for (const kind of embeddingKinds) {
-    if (!segments.some((segment) => segment.kind === kind)) {
+    const kindSegments = segments.filter((segment) => segment.kind === kind);
+    if (kindSegments.length === 0) {
       continue;
     }
-    const { data, covered } = buildVectorRows({ kind, merged, photoIds });
-    const { entry, compressed } = gzipEntry(`${kind}-int8.bin.gz`, data);
-    sets[kind] = { ...entry, covered };
-    files[entry.file] = compressed;
+    const entries = kindSegments.map((segment) => {
+      const names = segmentArtifactFiles(segment);
+      const compressed = gzipSync(segment.data, { level: 9 });
+      files[names.file] = compressed;
+      files[names.ids] = Buffer.from(`${JSON.stringify(segment.photoIds.map(String))}\n`);
+      return {
+        ...names,
+        count: segment.photoIds.length,
+        encoding: "gzip",
+        bytes: segment.data.length,
+        transferBytes: compressed.length,
+        idsBytes: files[names.ids].length,
+        sha256: sha256Hex(segment.data),
+      };
+    });
+    sets[kind] = {
+      covered: buildVectorRows({ kind, merged, photoIds }).covered,
+      transferBytes: entries.reduce((total, entry) => total + entry.transferBytes + entry.idsBytes, 0),
+      segments: entries,
+    };
   }
   const meta = {
-    formatVersion: embeddingFormatVersion,
+    formatVersion: vectorsMetaFormatVersion,
     dims: embeddingDims,
     rowBytes: embeddingRowBytes,
-    rowCount: photoIds.length,
     queryPrefix: embeddingQueryPrefix,
     sourceModel: embeddingSourceModel,
     queryModel: { ...embeddingQueryModel, ...(vocabulary ? { tokenizer: checkQueryVocabulary(vocabulary) } : {}) },
-    photosSha256,
     sets,
   };
   if (vocabulary) {
@@ -72,7 +91,7 @@ export function buildFinderVectorPayloads({ segments, photoIds, photosSha256, vo
   return { meta, files };
 }
 
-export async function buildFinderEmbeddingArtifacts({ embeddingsDir = defaultEmbeddingsDir, finderDataDir, photoIds, photosSha256 }) {
+export async function buildFinderEmbeddingArtifacts({ embeddingsDir = defaultEmbeddingsDir, finderDataDir, photoIds }) {
   const { segments } = await readEmbeddingStore(embeddingsDir);
   const vocabulary = await readFile(join(embeddingsDir, embeddingQueryVocabulary.file)).catch((error) => {
     if (error.code === "ENOENT") {
@@ -80,13 +99,14 @@ export async function buildFinderEmbeddingArtifacts({ embeddingsDir = defaultEmb
     }
     throw error;
   });
-  const payloads = buildFinderVectorPayloads({ segments, photoIds, photosSha256, vocabulary });
+  const payloads = buildFinderVectorPayloads({ segments, photoIds, vocabulary });
   if (!payloads) {
     return null;
   }
   const outputDir = join(finderDataDir, finderVectorsDir);
   await mkdir(outputDir, { recursive: true });
   for (const [file, data] of Object.entries(payloads.files)) {
+    await mkdir(dirname(join(outputDir, file)), { recursive: true });
     await writeFile(join(outputDir, file), data);
   }
   await writeFile(join(outputDir, "meta.json"), `${JSON.stringify(payloads.meta)}\n`);

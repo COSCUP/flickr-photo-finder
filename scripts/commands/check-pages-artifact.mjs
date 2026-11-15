@@ -3,18 +3,18 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import {
-  countCoveredRows,
   embeddingDims,
-  embeddingFormatVersion,
+  defaultEmbeddingsDir,
   embeddingKinds,
   embeddingQueryModel,
   embeddingQueryPrefix,
   embeddingQueryVocabulary,
   embeddingRowBytes,
   embeddingSourceModel,
+  readEmbeddingIndex,
   sha256Hex,
 } from "../lib/finder/embeddings.mjs";
-import { finderVectorsDir } from "../lib/pages/finder-embeddings.mjs";
+import { finderVectorsDir, segmentArtifactFiles, vectorsMetaFormatVersion } from "../lib/pages/finder-embeddings.mjs";
 import { collectRelativeJavaScriptImportGraph } from "../lib/pages/js-import-graph.mjs";
 import { defaultFinderDataDir } from "../lib/pages/static-finder-data.mjs";
 import { buildFinderDataUrls, semanticWorkerFile } from "./build-pages.mjs";
@@ -227,15 +227,17 @@ async function assertSemanticVectors(artifactDir, metaUrl) {
     throw new Error(`config.js finderEmbeddingsMetaUrl has an unexpected path: ${metaUrl}`);
   }
   const meta = await assertJson(join(artifactDir, artifactPathFromUrl(metaUrl)));
-  const manifest = await assertJson(join(artifactDir, defaultFinderDataDir, "manifest.json"));
-  if (meta.formatVersion !== embeddingFormatVersion) {
+  const index = await assertJson(join(artifactDir, defaultFinderDataDir, "photos-index.json"));
+  const photoIdColumn = index.fields?.indexOf("photo_id") ?? -1;
+  if (photoIdColumn < 0) {
+    throw new Error("photos-index.json has no photo_id field");
+  }
+  const indexPhotoIds = index.rows.map((row) => String(row[photoIdColumn]));
+  if (meta.formatVersion !== vectorsMetaFormatVersion) {
     throw new Error("vectors meta.json has an unknown formatVersion");
   }
   if (meta.dims !== embeddingDims || meta.rowBytes !== embeddingRowBytes) {
     throw new Error(`vectors meta.json must use dims ${embeddingDims} and rowBytes ${embeddingRowBytes}`);
-  }
-  if (meta.rowCount !== manifest.rowCount) {
-    throw new Error("vectors meta.json rowCount does not match finder-data manifest rowCount");
   }
   if (meta.queryPrefix !== embeddingQueryPrefix) {
     throw new Error("vectors meta.json queryPrefix does not match the embedding contract");
@@ -246,28 +248,48 @@ async function assertSemanticVectors(artifactDir, metaUrl) {
   if (["id", "revision", "dtype"].some((key) => meta.queryModel?.[key] !== embeddingQueryModel[key])) {
     throw new Error("vectors meta.json queryModel does not match the embedding contract");
   }
-  if (!meta.photosSha256 || meta.photosSha256 !== manifest.source?.photosSha256) {
-    throw new Error("vectors meta.json photosSha256 does not match finder-data manifest");
-  }
   const kinds = Object.keys(meta.sets ?? {});
   if (kinds.length === 0 || kinds.some((kind) => !embeddingKinds.includes(kind))) {
     throw new Error(`vectors meta.json sets must contain only: ${embeddingKinds.join(", ")}`);
   }
-  const expectedBytes = meta.rowCount * embeddingRowBytes;
+  const store = await readEmbeddingIndex(defaultEmbeddingsDir);
   for (const kind of kinds) {
     const set = meta.sets[kind];
-    if (set.file !== `${kind}-int8.bin.gz` || set.encoding !== "gzip") {
-      throw new Error(`vectors meta.json ${kind} file must be gzip-encoded ${kind}-int8.bin.gz`);
+    const expected = (store?.segments ?? []).filter((segment) => segment.kind === kind).map((segment) => segmentArtifactFiles(segment).file);
+    if (!Array.isArray(set.segments) || set.segments.length === 0) {
+      throw new Error(`vectors meta.json ${kind} must list its segments`);
     }
-    const data = await readGzipEntry(vectorsDir, set);
-    if (data.length !== expectedBytes || set.bytes !== expectedBytes) {
-      throw new Error(`${set.file} must be rowCount x ${embeddingRowBytes} = ${expectedBytes} bytes, got ${data.length}`);
+    if (store && JSON.stringify(set.segments.map((segment) => segment.file)) !== JSON.stringify(expected)) {
+      throw new Error(`vectors meta.json ${kind} segments do not match ${defaultEmbeddingsDir}/index.json`);
     }
-    if (sha256Hex(data) !== set.sha256) {
-      throw new Error(`${set.file} sha256 does not match vectors meta.json`);
+    const withVectors = new Set();
+    let transferBytes = 0;
+    for (const segment of set.segments) {
+      if (!/^segments\/[\w.-]+\.bin\.gz$/.test(segment.file) || !/^segments\/[\w.-]+\.ids\.json$/.test(segment.ids) || segment.encoding !== "gzip") {
+        throw new Error(`vectors meta.json ${kind} segment has an unexpected file name: ${segment.file}`);
+      }
+      const data = await readGzipEntry(vectorsDir, segment);
+      const expectedBytes = segment.count * embeddingRowBytes;
+      if (data.length !== expectedBytes || segment.bytes !== expectedBytes) {
+        throw new Error(`${segment.file} must be count x ${embeddingRowBytes} = ${expectedBytes} bytes, got ${data.length}`);
+      }
+      if (sha256Hex(data) !== segment.sha256) {
+        throw new Error(`${segment.file} sha256 does not match vectors meta.json`);
+      }
+      const idsPath = join(vectorsDir, segment.ids);
+      const photoIds = await assertJson(idsPath);
+      const idsBytes = (await readFile(idsPath)).length;
+      if (!Array.isArray(photoIds) || photoIds.length !== segment.count || idsBytes !== segment.idsBytes) {
+        throw new Error(`${segment.ids} must list ${segment.count} photo_ids and match idsBytes`);
+      }
+      photoIds.forEach((photoId) => withVectors.add(String(photoId)));
+      transferBytes += segment.transferBytes + segment.idsBytes;
     }
-    if (countCoveredRows(data) !== set.covered) {
-      throw new Error(`${set.file} covered row count does not match vectors meta.json`);
+    if (set.transferBytes !== transferBytes) {
+      throw new Error(`vectors meta.json ${kind} transferBytes does not add up`);
+    }
+    if (indexPhotoIds.filter((photoId) => withVectors.has(photoId)).length !== set.covered) {
+      throw new Error(`vectors meta.json ${kind} covered count does not match photos-index.json`);
     }
   }
   const tokenizer = meta.queryModel?.tokenizer;

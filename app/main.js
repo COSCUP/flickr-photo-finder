@@ -1310,8 +1310,7 @@ async function loadData() {
   photoRowById = new Map(photos.map((photo, row) => [String(photo.photo_id), row]));
   semantic = createSemanticController({
     metaUrl: dataSources.finderEmbeddingsMetaUrl ?? "",
-    photoCount: photos.length,
-    photosSha256: loadedData.finderDataManifest?.source?.photosSha256 ?? "",
+    photoIds: photos.map((photo) => String(photo.photo_id ?? "")),
     trackEvent,
     onChange: onSemanticChange,
   });

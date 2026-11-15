@@ -63,7 +63,7 @@ pnpm finder:embed --rebuild
 - 每次執行只新增分段，不修改既有分段。分段放在 `data/embeddings/segments/`，檔名含日期時間與類型，旁邊的 `.json` 記錄 photo_id（文字分段另有文字 hash）。
 - `data/embeddings/index.json` 依序列出所有分段；同一類型、同一張照片，後面的分段覆蓋前面的。
 - 沒有差異時不會新增分段。
-- 分段累積變多、或有照片已從 Sheets 移除時，執行 `--compact` 合併成一個基礎分段。compact 會改寫 repo 內的檔案，commit 時會有大量二進位 diff，不要和一般補算混在同一個 commit。
+- 分段累積變多、或有照片已從 Sheets 移除時，執行 `--compact` 合併成一個基礎分段。瀏覽器以分段為單位快取，平常的差異分段只會讓已開啟語意搜尋的使用者下載新增的部分；compact 會產生新的基礎分段，所有人都要重新下載一次完整向量（約 27 MB），所以只在差異分段累積到明顯浪費時才做，例如差異分段合計超過基礎分段的兩到三成。compact 會改寫 repo 內的檔案，commit 時會有大量二進位 diff，不要和一般補算混在同一個 commit。
 
 ## 換模型或改維度
 
