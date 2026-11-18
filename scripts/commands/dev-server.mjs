@@ -1,7 +1,8 @@
 import { copyFile, mkdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs as parseNodeArgs } from "node:util";
-import { buildPagesArtifact } from "./build-pages.mjs";
+import { buildPagesArtifact, logStaticArtifactSummary } from "./build-pages.mjs";
+import { finderDataModes } from "../lib/pages/static-finder-data.mjs";
 import { appTitle } from "../lib/core/project-config.mjs";
 import { startStaticServer } from "../lib/finder/serve.mjs";
 
@@ -20,9 +21,14 @@ function printUsage() {
 
 Options:
   --source <source>       Data source: sheets, fixture, or export. Default: sheets.
-  --output-dir <path>     Directory for the local dev artifact. Default: tmp/pages-dev/<source>.
+  --output-dir <path>     Directory for the local dev artifact. Default: tmp/pages-dev/<source>,
+                          or tmp/pages-dev/<source>-static for static-sharded.
   --albums-csv-url <url>  Override the albums CSV URL.
   --photos-csv-url <url>  Override the photos CSV URL.
+  --data-mode <mode>      runtime-csv or static-sharded. Default: runtime-csv.
+                          static-sharded builds the Pages read model and, when
+                          data/embeddings has segments, semantic search vectors.
+                          It supports the sheets and export sources.
   --help, -h              Show this help.
 
 Environment:
@@ -38,12 +44,14 @@ function parseArgs(argv) {
       "output-dir": { type: "string" },
       "albums-csv-url": { type: "string" },
       "photos-csv-url": { type: "string" },
+      "data-mode": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
   const options = {
     help: values.help ?? false,
     albumsCsvUrl: values["albums-csv-url"] ?? "",
+    dataMode: values["data-mode"] ?? "runtime-csv",
     outputDir: values["output-dir"] ?? "",
     photosCsvUrl: values["photos-csv-url"] ?? "",
     source: values.source ?? "sheets",
@@ -52,6 +60,12 @@ function parseArgs(argv) {
   if (!options.help) {
     if (!sourceChoices.has(options.source)) {
       throw new Error(`--source must be one of: ${[...sourceChoices].join(", ")}`);
+    }
+    if (!finderDataModes.has(options.dataMode)) {
+      throw new Error(`--data-mode must be one of: ${[...finderDataModes].join(", ")}`);
+    }
+    if (options.dataMode === "static-sharded" && options.source === "fixture" && !options.photosCsvUrl) {
+      throw new Error("--data-mode static-sharded supports --source sheets or export, not fixture");
     }
   }
 
@@ -129,13 +143,7 @@ async function copyLocalPhotosCsv(sourcePath, outputDir) {
   await copyFile(sourcePath, destination);
 }
 
-async function main() {
-  const options = parseArgs(process.argv);
-  if (options.help) {
-    printUsage();
-    return;
-  }
-
+async function buildRuntimeDevArtifact(options) {
   const dataSource = await resolveDataSource(options);
   const outputDir = options.outputDir || join(defaultOutputBaseDir, dataSource.label);
   const result = await buildPagesArtifact({
@@ -162,6 +170,41 @@ async function main() {
   }
   console.log(`Albums CSV URL: ${result.albumsCsvUrl || "(none)"}`);
   console.log(`Photos CSV URL: ${result.photosCsvUrl}`);
+  return result;
+}
+
+// static-sharded reads the data at build time, like the Pages build, so the
+// served artifact matches production and includes semantic search vectors.
+async function buildStaticDevArtifact(options) {
+  const label = options.photosCsvUrl ? "custom" : options.source;
+  if (label === "export") {
+    await assertReadableFile("tmp/sheets-export/albums.csv", "Run pnpm sheets:export before using --source export.");
+    await assertReadableFile("tmp/sheets-export/photos.csv", "Run pnpm sheets:export before using --source export.");
+  }
+  const result = await buildPagesArtifact({
+    outputDir: options.outputDir || join(defaultOutputBaseDir, `${label}-static`),
+    albumsCsvUrl: options.albumsCsvUrl,
+    dataMode: "static-sharded",
+    dataSource: label === "export" ? "export" : "public-csv",
+    photosCsvUrl: options.photosCsvUrl,
+  });
+
+  console.log(`Frontend dev artifact written to ${result.outputDir}`);
+  console.log(`Data source: ${label} (static-sharded)`);
+  logStaticArtifactSummary(result);
+  return result;
+}
+
+async function main() {
+  const options = parseArgs(process.argv);
+  if (options.help) {
+    printUsage();
+    return;
+  }
+
+  const result = options.dataMode === "static-sharded"
+    ? await buildStaticDevArtifact(options)
+    : await buildRuntimeDevArtifact(options);
 
   startStaticServer({
     rootDir: result.outputDir,

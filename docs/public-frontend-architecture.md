@@ -178,7 +178,16 @@ GitHub Pages Finder 可以註冊 service worker，讓已開啟過的公開搜尋
 - `pnpm finder:dev:fixture`：讀 `fixtures/photos.csv`，適合最小樣本、離線 smoke test 與 regression 檢查。
 - `pnpm finder:dev:export`：讀 `tmp/sheets-export/photos.csv`，適合使用最近一次正式 Sheets 匯出快照開發；若檔案不存在，先執行 `pnpm sheets:export`。
 
-這三種入口都會先產生本機 dev artifact，預設放在 `tmp/pages-dev/<source>/`，並在 terminal 印出 `Data source` 與實際 `Photos CSV URL`。本機 dev 入口刻意使用 `runtime-csv`，方便直接對照 Sheets/fixture/export。部署到 GitHub Pages 時，使用 `pnpm finder:build` 產生 `tmp/pages/`，預設改為 `static-sharded`。
+這三種入口都會先產生本機 dev artifact，預設放在 `tmp/pages-dev/<source>/`，並在 terminal 印出 `Data source` 與實際 `Photos CSV URL`。本機 dev 入口預設使用 `runtime-csv`，方便直接對照 Sheets/fixture/export。部署到 GitHub Pages 時，使用 `pnpm finder:build` 產生 `tmp/pages/`，預設改為 `static-sharded`。
+
+`runtime-csv` 不會產生語意搜尋向量，前端因此不顯示語意搜尋。要在本機預覽語意搜尋或部署版資料形狀，加上 `--data-mode static-sharded`：
+
+```bash
+pnpm finder:dev -- --data-mode static-sharded
+pnpm finder:dev:export -- --data-mode static-sharded
+```
+
+這個模式和 `pnpm finder:build` 一樣在建置時讀取資料，artifact 放在 `tmp/pages-dev/<source>-static/`，`data/embeddings` 有 segment 時會一併產生向量；只支援 `sheets` 與 `export`，不支援 `fixture`。Sheets 之後的更新要重新啟動才會反映。
 
 若要用最近一次正式 Sheets 匯出快照產生 static artifact，可執行：
 

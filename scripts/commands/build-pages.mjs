@@ -464,14 +464,18 @@ async function main() {
     console.log(`Albums CSV URL: ${result.albumsCsvUrl || "(none)"}`);
     console.log(`Photos CSV URL: ${result.photosCsvUrl}`);
   } else {
-    console.log(`Static photos: ${result.staticManifest.rowCount}`);
-    console.log(`Static shards: ${result.staticManifest.shards.length}`);
-    if (result.vectorsMeta) {
-      const sets = Object.entries(result.vectorsMeta.sets).map(([kind, set]) => `${kind} ${set.covered}/${result.staticManifest.rowCount} (${set.segments.length} segment${set.segments.length === 1 ? "" : "s"})`);
-      console.log(`Semantic vectors: ${sets.join(", ")}`);
-    } else {
-      console.log("Semantic vectors: skipped (no embedding segments)");
-    }
+    logStaticArtifactSummary(result);
+  }
+}
+
+export function logStaticArtifactSummary({ staticManifest, vectorsMeta }) {
+  console.log(`Static photos: ${staticManifest.rowCount}`);
+  console.log(`Static shards: ${staticManifest.shards.length}`);
+  if (vectorsMeta) {
+    const sets = Object.entries(vectorsMeta.sets).map(([kind, set]) => `${kind} ${set.covered}/${staticManifest.rowCount} (${set.segments.length} segment${set.segments.length === 1 ? "" : "s"})`);
+    console.log(`Semantic vectors: ${sets.join(", ")}`);
+  } else {
+    console.log("Semantic vectors: skipped (no embedding segments)");
   }
 }
 
