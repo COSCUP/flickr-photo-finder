@@ -1,8 +1,10 @@
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs as parseNodeArgs } from "node:util";
 import { googleSheetsSpreadsheetId, projectConfig } from "../lib/core/project-config.mjs";
+import { defaultEmbeddingsDir } from "../lib/finder/embeddings.mjs";
+import { buildFinderEmbeddingArtifacts, finderVectorsDir } from "../lib/pages/finder-embeddings.mjs";
 import { collectRelativeJavaScriptImportGraph } from "../lib/pages/js-import-graph.mjs";
 import {
   buildStaticFinderPayloads,
@@ -16,6 +18,7 @@ import {
 } from "../lib/pages/static-finder-data.mjs";
 
 export const defaultOutputDir = "tmp/pages";
+export const semanticWorkerFile = "semantic-worker.js";
 
 function printUsage() {
   console.log(`Usage:
@@ -29,12 +32,15 @@ Options:
   --data-mode <mode>      runtime-csv or static-sharded. Default: static-sharded.
   --data-source <source>  public-csv or export for static-sharded. Default: public-csv.
   --shard-size <count>    Photos per detail shard for static-sharded. Default: 512.
+  --embeddings-dir <path> Embedding segments for semantic search vectors. Default: data/embeddings.
   --help, -h              Show this help.
 
 This command builds a clean GitHub Pages artifact. It does not write Google
 Sheets and does not include repo tools, fixtures, tmp data, or credentials.
 In static-sharded mode it builds a public read model from Google Sheets data
-at build time so production Pages does not fetch Google Sheets at runtime.`);
+at build time so production Pages does not fetch Google Sheets at runtime.
+When the embeddings directory has segments, static-sharded mode also writes
+data/finder-data/vectors/ for opt-in semantic search; otherwise it is skipped.`);
 }
 
 function parseArgs(argv) {
@@ -48,6 +54,7 @@ function parseArgs(argv) {
       "data-mode": { type: "string" },
       "data-source": { type: "string" },
       "shard-size": { type: "string" },
+      "embeddings-dir": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -57,6 +64,7 @@ function parseArgs(argv) {
     albumsCsvUrl: values["albums-csv-url"] ?? "",
     dataMode: values["data-mode"] ?? "static-sharded",
     dataSource: values["data-source"] ?? "public-csv",
+    embeddingsDir: values["embeddings-dir"] ?? defaultEmbeddingsDir,
     photosCsvUrl: values["photos-csv-url"] ?? "",
     shardSize: values["shard-size"] === undefined ? defaultShardSize : Number(values["shard-size"]),
     spreadsheetId: values["spreadsheet-id"] ?? googleSheetsSpreadsheetId,
@@ -108,6 +116,31 @@ async function copyPagesJavaScriptModules(outputDir) {
     await copyIntoArtifact(join("app", file), outputDir, file);
   }
   return files.filter((file) => file !== "config.js");
+}
+
+async function fileExists(path) {
+  try {
+    return (await stat(path)).isFile();
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+// The semantic search worker is loaded with new Worker(), so it is outside the
+// main.js import graph and must be copied explicitly with its own imports.
+async function copySemanticWorker(outputDir) {
+  if (!await fileExists(join("app", semanticWorkerFile))) {
+    console.warn(`Warning: app/${semanticWorkerFile} not found; semantic search worker is not included in the artifact.`);
+    return [];
+  }
+  const files = await collectRelativeJavaScriptImportGraph({ rootDir: "app", entryFile: semanticWorkerFile });
+  for (const file of files) {
+    await copyIntoArtifact(join("app", file), outputDir, file);
+  }
+  return files;
 }
 
 function artifactUrl(path) {
@@ -185,7 +218,11 @@ async function writeServiceWorker(outputDir, { dataMode, dataSource, jsFiles, st
   await writeFile(join(outputDir, "service-worker.js"), `${header}${source}`);
 }
 
-async function writePagesConfig(outputDir, { albumsCsvUrl, dataMode, photosCsvUrl }) {
+export function finderEmbeddingsMetaUrl(vectorsMeta) {
+  return vectorsMeta ? `./${defaultFinderDataDir}/${finderVectorsDir}/meta.json` : "";
+}
+
+async function writePagesConfig(outputDir, { albumsCsvUrl, dataMode, embeddingsMetaUrl, photosCsvUrl }) {
   const content = `export const projectConfigUrl = "./config/project.json";
 
 export const dataSources = {
@@ -195,6 +232,7 @@ export const dataSources = {
   finderDataManifestUrl: "./${defaultFinderDataDir}/manifest.json",
   finderDataAlbumsUrl: "./${defaultFinderDataDir}/albums.json",
   finderDataIndexUrl: "./${defaultFinderDataDir}/photos-index.json",
+  finderEmbeddingsMetaUrl: ${JSON.stringify(embeddingsMetaUrl)},
   interfaceRegistryJsonUrl: "./data/interface-registry.json",
   schemaJsonUrl: "./data/photo-schema.json",
   searchAliasesJsonUrl: "./data/search-aliases.json",
@@ -223,23 +261,33 @@ async function readPublicCsvInputs({ albumsCsvUrl, photosCsvUrl }) {
   return { albumsText, photoSchema, photosText, searchAliases, taxonomy };
 }
 
-async function buildStaticFinderData({ albumsCsvUrl, outputDir, photosCsvUrl, dataSource, shardSize }) {
+export async function readStaticFinderPayloads({ albumsCsvUrl, photosCsvUrl, dataSource, shardSize = defaultShardSize }) {
   const input =
     dataSource === "export"
       ? await readStaticFinderDataInputs()
       : await readPublicCsvInputs({ albumsCsvUrl, photosCsvUrl });
-  const payloads = buildStaticFinderPayloads({
+  return buildStaticFinderPayloads({
     ...input,
     shardSize,
     source: dataSource === "export"
       ? { type: "export", albumsCsvPath: "tmp/sheets-export/albums.csv", photosCsvPath: "tmp/sheets-export/photos.csv" }
       : { type: "public-csv", albumsCsvUrl, photosCsvUrl },
   });
+}
+
+async function buildStaticFinderData({ albumsCsvUrl, embeddingsDir, outputDir, photosCsvUrl, dataSource, shardSize }) {
+  const payloads = await readStaticFinderPayloads({ albumsCsvUrl, photosCsvUrl, dataSource, shardSize });
+  const finderDataDir = join(outputDir, defaultFinderDataDir);
   await writeStaticFinderDataArtifacts({
-    outputDir: join(outputDir, defaultFinderDataDir),
+    outputDir: finderDataDir,
     payloads,
   });
-  return payloads.manifest;
+  const vectorsMeta = await buildFinderEmbeddingArtifacts({
+    embeddingsDir,
+    finderDataDir,
+    photoIds: payloads.photos.map((photo) => photo.photo_id),
+  });
+  return { manifest: payloads.manifest, vectorsMeta };
 }
 
 function escapeHtmlAttribute(value) {
@@ -322,6 +370,7 @@ export async function buildPagesArtifact({
   albumsCsvUrl = "",
   dataMode = "static-sharded",
   dataSource = "public-csv",
+  embeddingsDir = defaultEmbeddingsDir,
   photosCsvUrl = "",
   shardSize = defaultShardSize,
   spreadsheetId = googleSheetsSpreadsheetId,
@@ -349,6 +398,7 @@ export async function buildPagesArtifact({
   await mkdir(outputDir, { recursive: true });
   await writeIndexHtml(outputDir);
   const jsFiles = await copyPagesJavaScriptModules(outputDir);
+  const semanticWorkerFiles = await copySemanticWorker(outputDir);
   await copyIntoArtifact("app/styles.css", outputDir, "styles.css");
   await copyIntoArtifact("app/appearance.js", outputDir, "appearance.js");
   await copyIntoArtifact("app/assets/og-image.png", outputDir, "assets/og-image.png");
@@ -361,18 +411,21 @@ export async function buildPagesArtifact({
   await copyIntoArtifact("data/search-aliases.json", outputDir);
   await copyIntoArtifact("data/tag-taxonomy.json", outputDir);
   let staticManifest = null;
+  let vectorsMeta = null;
   if (dataMode === "static-sharded") {
-    staticManifest = await buildStaticFinderData({
+    ({ manifest: staticManifest, vectorsMeta } = await buildStaticFinderData({
       albumsCsvUrl: resolvedAlbumsCsvUrl,
       dataSource,
+      embeddingsDir,
       outputDir,
       photosCsvUrl: resolvedPhotosCsvUrl,
       shardSize,
-    });
+    }));
   }
   await writePagesConfig(outputDir, {
     albumsCsvUrl: dataMode === "runtime-csv" ? resolvedAlbumsCsvUrl : "",
     dataMode,
+    embeddingsMetaUrl: finderEmbeddingsMetaUrl(vectorsMeta),
     photosCsvUrl: dataMode === "runtime-csv" ? resolvedPhotosCsvUrl : "",
   });
   await writeServiceWorker(outputDir, {
@@ -389,7 +442,9 @@ export async function buildPagesArtifact({
     outputDir,
     albumsCsvUrl: resolvedAlbumsCsvUrl,
     photosCsvUrl: resolvedPhotosCsvUrl,
+    semanticWorkerFiles,
     staticManifest,
+    vectorsMeta,
   };
 }
 
@@ -409,8 +464,18 @@ async function main() {
     console.log(`Albums CSV URL: ${result.albumsCsvUrl || "(none)"}`);
     console.log(`Photos CSV URL: ${result.photosCsvUrl}`);
   } else {
-    console.log(`Static photos: ${result.staticManifest.rowCount}`);
-    console.log(`Static shards: ${result.staticManifest.shards.length}`);
+    logStaticArtifactSummary(result);
+  }
+}
+
+export function logStaticArtifactSummary({ staticManifest, vectorsMeta }) {
+  console.log(`Static photos: ${staticManifest.rowCount}`);
+  console.log(`Static shards: ${staticManifest.shards.length}`);
+  if (vectorsMeta) {
+    const sets = Object.entries(vectorsMeta.sets).map(([kind, set]) => `${kind} ${set.covered}/${staticManifest.rowCount} (${set.segments.length} segment${set.segments.length === 1 ? "" : "s"})`);
+    console.log(`Semantic vectors: ${sets.join(", ")}`);
+  } else {
+    console.log("Semantic vectors: skipped (no embedding segments)");
   }
 }
 

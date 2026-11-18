@@ -1,0 +1,32 @@
+{
+  "formatVersion": "2026-11-embeddings-v1",
+  "dims": 512,
+  "rowBytes": 516,
+  "quantization": "int8-row-scale",
+  "documentFormat": "eg2-photo-doc-v1",
+  "queryPrefix": "task: search result | query: ",
+  "sourceModel": "EmbeddingGemma 2 (8-bit, 768d truncated to 512d)",
+  "queryModel": {
+    "id": "onnx-community/embeddinggemma-2-ONNX",
+    "revision": "daa72c51243991dfcaf9f9137d2c573d8f7790c0",
+    "dtype": "q4"
+  },
+  "segments": [
+    {
+      "kind": "text",
+      "file": "segments/20261114-2233-text.bin",
+      "ids": "segments/20261114-2233-text.json",
+      "count": 34332,
+      "sha256": "6e1b8a1e4b3aaa112130f0d25d0f9b6cd2909db9ec36ca1af6810f000d62f4fd",
+      "createdAt": "2026-11-14T14:33:01.919Z"
+    },
+    {
+      "kind": "image",
+      "file": "segments/20261114-2233-image.bin",
+      "ids": "segments/20261114-2233-image.json",
+      "count": 34332,
+      "sha256": "41f56a13a389ea76d08ea26862f99db151c10c479ed82e3dcef4d8747f882831",
+      "createdAt": "2026-11-14T14:33:01.919Z"
+    }
+  ]
+}

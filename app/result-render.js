@@ -50,6 +50,50 @@ export function resultContextText({ photos, filtered, controls, activeTask, acti
   return `${sortText}，這些是目前命中的照片；有些標籤尚未人工確認。${filterText ? `已套用：${filterText}` : "未套用額外篩選。"}`;
 }
 
+// Semantic and similarity rankings are a bounded top-N by similarity, not a
+// match set; the wording must say so (ADR 0007).
+export function semanticResultText({ mode, count, sourceTitle = "", pending = false, activeFilterEntries }) {
+  const filterText = activeFilterEntries()
+    .filter(([key]) => key !== "task" && key !== "search" && key !== "similar")
+    .map(([, label, value]) => `${label} ${value}`)
+    .join(" / ");
+  const filterSuffix = filterText ? `已套用：${filterText}` : "未套用額外篩選。";
+  if (pending) {
+    return {
+      summary: "正在計算語意相似度",
+      context: "查詢內容只在這個瀏覽器裡計算。",
+    };
+  }
+  if (mode === "similar") {
+    return {
+      summary: `與「${sourceTitle}」畫面相似的前 ${count} 張，不代表全部符合`,
+      context: `依圖片向量的整體畫面相似度排序，不辨識人物；會套用其他篩選，但不使用排序選單。${filterSuffix}`,
+    };
+  }
+  return {
+    summary: `依語意相似度排序的前 ${count} 張，不代表全部符合`,
+    context: `語意分頁會套用其他篩選，但不使用排序選單；沒有向量的照片只會出現在關鍵字分頁。${filterSuffix}`,
+  };
+}
+
+export function renderResultTabs({ elements, show, view, semanticCount, keywordCount, pending = false }) {
+  elements.resultTabs.hidden = !show;
+  if (!show) {
+    return;
+  }
+  elements.semanticTab.textContent = pending ? "語意相近（計算中）" : `語意相近（前 ${semanticCount} 張）`;
+  elements.keywordTab.textContent = `關鍵字命中（${keywordCount} 張）`;
+  for (const [tab, tabView] of [
+    [elements.semanticTab, "semantic"],
+    [elements.keywordTab, "keyword"],
+  ]) {
+    const selected = tabView === view;
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+    tab.tabIndex = selected ? 0 : -1;
+    tab.classList.toggle("is-active", selected);
+  }
+}
+
 export const autoLoadMoreDistancePx = 640;
 
 export function shouldAutoLoadMore({

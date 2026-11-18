@@ -117,6 +117,44 @@ GitHub Pages Finder 可以註冊 service worker，讓已開啟過的公開搜尋
 
 這個快取不是第二份資料庫。正式資料權威仍是 Google Sheets，部署 artifact 仍由 `pnpm finder:build` 從公開資料產生。`runtime-csv` 模式保留為開發與緊急 fallback，不承諾完整 PWA 離線體驗。
 
+## 可選開啟的語意搜尋
+
+語意搜尋與以圖找圖是使用者主動開啟的選用功能，決策背景與取捨記錄在 [ADR 0013](adr/0013-opt-in-semantic-search.md)，維護者產生向量的流程在 `docs/semantic-search-maintenance.md`。預設不下載任何向量或模型，原本的關鍵字搜尋不受影響。
+
+### 資料流
+
+1. 維護者在本機用 `pnpm finder:embed` 產生向量分段，放在 `data/embeddings/`。
+2. `pnpm finder:build` 把 repo 的每個分段原樣放進 `data/finder-data/vectors/segments/`：列資料以 gzip 傳送（`<分段>.bin.gz`，Pages 不壓縮 `.bin`，瀏覽器用 `DecompressionStream` 解壓），photo_id 清單是 `<分段>.ids.json`。`meta.json` 依合併順序列出每種向量的分段，`bytes` 與 `sha256` 描述解壓後的列資料，`transferBytes` 是下載大小；tokenizer 的 gzip 檔 `query-vocabulary.json.gz` 也放在同一個目錄。瀏覽器以 photo_id 把各分段的列放到 `photos-index.json` 對應的列，後面的分段覆蓋前面的；每個分段依 sha256 各自快取，新部署只需要下載瀏覽器還沒有的分段，新增照片而沒有新向量時則完全不用下載。每列 516 bytes：512 個 int8 加上 1 個 float32 scale；scale 為 0 表示該照片沒有這種向量。
+3. 使用者在對話框確認後，前端下載向量、模型與函式庫：向量來自 Pages，模型權重來自 huggingface.co（固定 revision），tokenizer 來自本站，transformers.js 與 WASM 來自 jsDelivr（固定 4.3.2）。所有 Hugging Face 請求都固定在同一個 revision，包含 tokenizer 的預檢。
+4. 查詢文字在 `semantic-worker.js`（Web Worker）內轉成向量，主執行緒以 `semantic-search.js` 對照片向量做 cosine 排名，再以 RRF 合併文字與圖片排名。查詢文字與向量不離開瀏覽器。
+
+`data/embeddings/` 不存在或沒有分段時，build 不產生 `vectors/`，設定中的向量 URL 為空字串，前端隱藏語意搜尋入口。`semantic-worker.js` 不在 import graph 內，由 build 明確複製進 artifact。
+
+### 瀏覽器需求
+
+查詢模型優先用 WebGPU 執行；沒有可用的 WebGPU adapter，或 GPU 廠商是 `arm`（Mali）時，改用 ORT-web 的 WASM 後端在 CPU 執行。EmbeddingGemma 2 的量化模型用 `GatherBlockQuantized` 查詢詞嵌入，WASM 後端沒有這個運算子，所以 worker 在建立 session 前，把約 0.5 MB 的模型結構裡這個節點改寫成 `Gather`、`Cast`、`Div`、`Mul`、`Sub`、`Concat`、`Reshape` 等標準運算子，再存回 `transformers-cache`；權重檔不變，與 ORT 原本的運算子比對結果完全相同（cosine 1.000000）。
+
+### 快取策略
+
+- service worker 替導覽回應與 worker 腳本加上 COOP `same-origin` 與 COEP `credentialless` 標頭，讓查詢模型的 WASM 能使用多執行緒；Flickr 圖片沒有 CORP 標頭，所以用 `credentialless`。
+- service worker 對 `data/finder-data/vectors/` 完全不處理，也不放進 precache，避免快取優先策略在背景重複下載數十 MB。
+- 向量由前端自己的 Cache API 管理，快取名稱為 `photo-finder-semantic-vectors-<sha256>`，內容沒變就能跨部署沿用。名稱刻意不用 `coscup-photo-finder-` 開頭，因為 service worker 在 activate 時會刪除該前綴下不屬於本次部署的快取。
+- 模型與 WASM 由 transformers.js 寫入 `transformers-cache`。
+- 取消下載或下載失敗時，會自動清除已下載的部分資料，避免留下不完整的快取。
+- 開啟狀態存在 localStorage，不放進 URL。下次進站只有在 Cache API 確認檔案都已快取時才自動載入，否則提示需要重新下載，不會自動下載。
+- 使用者可在對話框清除已下載資料，會同時刪除自己的 Cache 與 `transformers-cache`。
+
+### 結果分頁與 URL 參數
+
+- 語意搜尋就緒且有查詢時，結果上方出現兩個分頁：「語意相近」（前 N 張，N 來自 `data/interface-registry.json` 的 `semanticTopK`）與「關鍵字命中」。預設為語意。
+- 關鍵字分頁維持原本行為。語意分頁套用其他篩選，但忽略排序選單；沒有向量的照片只出現在關鍵字分頁。摘要必須說明這是依相似度排序的前 N 張，不代表全部符合，遵守 [ADR 0007](adr/0007-finder-index-results-are-not-absence-proof.md)。
+- 預覽對話框的「找相似照片」只使用圖片向量，不需要文字模型；結果以可移除的「相似於」chip 呈現。以圖找圖會記住原本的查詢，移除 chip 時還原。
+- URL 參數 `view=semantic|keyword` 記錄分頁，`similar=<photo_id>` 記錄以圖找圖的來源照片。語意搜尋是否開啟不放進 URL；對方沒開啟時，分享連結退回關鍵字搜尋。
+
+### 邊界
+
+語意搜尋使用一般圖片與文字 embedding 的整體相似度，不是人臉辨識或人物分群，不提供辨識或追蹤特定人物的功能，邊界見 [ADR 0008](adr/0008-photo-index-product-boundary.md)。
+
 ## 上線前準備
 
 使用 GitHub Pages 讀取正式 Google Sheets 前，維護者需要確認：
@@ -140,7 +178,16 @@ GitHub Pages Finder 可以註冊 service worker，讓已開啟過的公開搜尋
 - `pnpm finder:dev:fixture`：讀 `fixtures/photos.csv`，適合最小樣本、離線 smoke test 與 regression 檢查。
 - `pnpm finder:dev:export`：讀 `tmp/sheets-export/photos.csv`，適合使用最近一次正式 Sheets 匯出快照開發；若檔案不存在，先執行 `pnpm sheets:export`。
 
-這三種入口都會先產生本機 dev artifact，預設放在 `tmp/pages-dev/<source>/`，並在 terminal 印出 `Data source` 與實際 `Photos CSV URL`。本機 dev 入口刻意使用 `runtime-csv`，方便直接對照 Sheets/fixture/export。部署到 GitHub Pages 時，使用 `pnpm finder:build` 產生 `tmp/pages/`，預設改為 `static-sharded`。
+這三種入口都會先產生本機 dev artifact，預設放在 `tmp/pages-dev/<source>/`，並在 terminal 印出 `Data source` 與實際 `Photos CSV URL`。本機 dev 入口預設使用 `runtime-csv`，方便直接對照 Sheets/fixture/export。部署到 GitHub Pages 時，使用 `pnpm finder:build` 產生 `tmp/pages/`，預設改為 `static-sharded`。
+
+`runtime-csv` 不會產生語意搜尋向量，前端因此不顯示語意搜尋。要在本機預覽語意搜尋或部署版資料形狀，加上 `--data-mode static-sharded`：
+
+```bash
+pnpm finder:dev -- --data-mode static-sharded
+pnpm finder:dev:export -- --data-mode static-sharded
+```
+
+這個模式和 `pnpm finder:build` 一樣在建置時讀取資料，artifact 放在 `tmp/pages-dev/<source>-static/`，`data/embeddings` 有 segment 時會一併產生向量；只支援 `sheets` 與 `export`，不支援 `fixture`。Sheets 之後的更新要重新啟動才會反映。文字語意搜尋的查詢模型需要安全環境（HTTPS 或 `localhost`）才有的 Cache API 與 WebGPU；用 `http://` 加區網 IP 開啟時，前端隱藏文字語意搜尋並說明原因，以圖找圖仍可使用，但向量不會寫入瀏覽器快取。要讓其他裝置 demo 文字語意搜尋，請透過 HTTPS 提供 dev server。
 
 若要用最近一次正式 Sheets 匯出快照產生 static artifact，可執行：
 

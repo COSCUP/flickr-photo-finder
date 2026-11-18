@@ -104,6 +104,8 @@ export function resultsEventParams(snapshot) {
     result_count: snapshot.resultCount,
     result_count_bucket: resultCountBucket(snapshot.resultCount),
     search_surface: "main",
+    // Only the mode is reported; query vectors and similarity scores stay local.
+    search_mode: snapshot.searchMode || "keyword",
     task_mode: snapshot.taskMode,
     sort_mode: snapshot.sortMode,
     filter_count: Object.entries(snapshot)

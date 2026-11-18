@@ -1139,7 +1139,9 @@ var SITCON_PHOTO_FINDER_CONFIG = {
         "resultTrackingDelayMs": 600,
         "discoverWindowSize": 24,
         "discoverHistorySize": 12,
-        "discoverCandidateLimit": 2000
+        "discoverCandidateLimit": 2000,
+        "semanticTopK": 200,
+        "semanticRrfK": 60
       },
       "filters": [
         {

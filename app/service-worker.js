@@ -29,6 +29,41 @@ function isDetailShardPath(url) {
   return /^data\/finder-data\/shards\/photos-\d+\.json$/.test(normalizedPath(url));
 }
 
+// Semantic search vectors are opt-in downloads cached by the page itself.
+function isSemanticVectorPath(url) {
+  return normalizedPath(url).startsWith("data/finder-data/vectors/");
+}
+
+// GitHub Pages cannot send headers, so the worker adds the cross-origin
+// isolation headers to pages (and the semantic worker script) it serves; that
+// enables SharedArrayBuffer and so multi-threaded WebAssembly for the query
+// model. credentialless (not require-corp) keeps Flickr images, which send no
+// CORP header, loading. A first visit before the worker controls the page is
+// simply not isolated.
+const ISOLATION_HEADERS = {
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "credentialless",
+};
+const ISOLATE_DESTINATIONS = new Set(["document", "worker"]);
+
+function withIsolation(response) {
+  // Opaque and redirect responses cannot be read or rebuilt; a navigation
+  // follows the redirect itself and comes back here for the target.
+  if (!response || response.type === "opaque" || response.type === "opaqueredirect" || response.status === 0) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(ISOLATION_HEADERS)) {
+    headers.set(name, value);
+  }
+  const nullBody = [101, 204, 205, 304].includes(response.status);
+  return new Response(nullBody ? null : response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 async function putCache(cacheName, request, response) {
   if (!response || !response.ok) {
     return response;
@@ -114,12 +149,17 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (normalizedPath(url) === "service-worker.js") {
+  if (normalizedPath(url) === "service-worker.js" || isSemanticVectorPath(url)) {
     return;
   }
 
   if (event.request.mode === "navigate") {
-    event.respondWith(networkFirst(event, APP_CACHE, "./index.html"));
+    event.respondWith(networkFirst(event, APP_CACHE, "./index.html").then(withIsolation));
+    return;
+  }
+
+  if (ISOLATE_DESTINATIONS.has(event.request.destination)) {
+    event.respondWith(cacheFirstWithBackgroundUpdate(event, APP_CACHE).then(withIsolation));
     return;
   }
 

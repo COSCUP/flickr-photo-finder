@@ -1,9 +1,23 @@
 import { join } from "node:path";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { parseArgs as parseNodeArgs } from "node:util";
+import { gunzipSync } from "node:zlib";
+import {
+  embeddingDims,
+  defaultEmbeddingsDir,
+  embeddingKinds,
+  embeddingQueryModel,
+  embeddingQueryPrefix,
+  embeddingQueryVocabulary,
+  embeddingRowBytes,
+  embeddingSourceModel,
+  readEmbeddingIndex,
+  sha256Hex,
+} from "../lib/finder/embeddings.mjs";
+import { finderVectorsDir, segmentArtifactFiles, vectorsMetaFormatVersion } from "../lib/pages/finder-embeddings.mjs";
 import { collectRelativeJavaScriptImportGraph } from "../lib/pages/js-import-graph.mjs";
 import { defaultFinderDataDir } from "../lib/pages/static-finder-data.mjs";
-import { buildFinderDataUrls } from "./build-pages.mjs";
+import { buildFinderDataUrls, semanticWorkerFile } from "./build-pages.mjs";
 
 const defaultArtifactDir = "tmp/pages";
 
@@ -189,6 +203,120 @@ async function assertStaticFinderData(artifactDir) {
   }
 }
 
+async function pathExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function assertSemanticVectors(artifactDir, metaUrl) {
+  const vectorsDir = join(artifactDir, defaultFinderDataDir, finderVectorsDir);
+  if (!metaUrl) {
+    if (await pathExists(vectorsDir)) {
+      throw new Error("config.js finderEmbeddingsMetaUrl is empty but the artifact contains semantic vectors");
+    }
+    return;
+  }
+  if (metaUrl !== `./${defaultFinderDataDir}/${finderVectorsDir}/meta.json`) {
+    throw new Error(`config.js finderEmbeddingsMetaUrl has an unexpected path: ${metaUrl}`);
+  }
+  const meta = await assertJson(join(artifactDir, artifactPathFromUrl(metaUrl)));
+  const index = await assertJson(join(artifactDir, defaultFinderDataDir, "photos-index.json"));
+  const photoIdColumn = index.fields?.indexOf("photo_id") ?? -1;
+  if (photoIdColumn < 0) {
+    throw new Error("photos-index.json has no photo_id field");
+  }
+  const indexPhotoIds = index.rows.map((row) => String(row[photoIdColumn]));
+  if (meta.formatVersion !== vectorsMetaFormatVersion) {
+    throw new Error("vectors meta.json has an unknown formatVersion");
+  }
+  if (meta.dims !== embeddingDims || meta.rowBytes !== embeddingRowBytes) {
+    throw new Error(`vectors meta.json must use dims ${embeddingDims} and rowBytes ${embeddingRowBytes}`);
+  }
+  if (meta.queryPrefix !== embeddingQueryPrefix) {
+    throw new Error("vectors meta.json queryPrefix does not match the embedding contract");
+  }
+  if (meta.sourceModel !== embeddingSourceModel) {
+    throw new Error("vectors meta.json sourceModel does not match the embedding contract");
+  }
+  if (["id", "revision", "dtype"].some((key) => meta.queryModel?.[key] !== embeddingQueryModel[key])) {
+    throw new Error("vectors meta.json queryModel does not match the embedding contract");
+  }
+  const kinds = Object.keys(meta.sets ?? {});
+  if (kinds.length === 0 || kinds.some((kind) => !embeddingKinds.includes(kind))) {
+    throw new Error(`vectors meta.json sets must contain only: ${embeddingKinds.join(", ")}`);
+  }
+  const store = await readEmbeddingIndex(defaultEmbeddingsDir);
+  for (const kind of kinds) {
+    const set = meta.sets[kind];
+    const expected = (store?.segments ?? []).filter((segment) => segment.kind === kind).map((segment) => segmentArtifactFiles(segment).file);
+    if (!Array.isArray(set.segments) || set.segments.length === 0) {
+      throw new Error(`vectors meta.json ${kind} must list its segments`);
+    }
+    if (store && JSON.stringify(set.segments.map((segment) => segment.file)) !== JSON.stringify(expected)) {
+      throw new Error(`vectors meta.json ${kind} segments do not match ${defaultEmbeddingsDir}/index.json`);
+    }
+    const withVectors = new Set();
+    let transferBytes = 0;
+    for (const segment of set.segments) {
+      if (!/^segments\/[\w.-]+\.bin\.gz$/.test(segment.file) || !/^segments\/[\w.-]+\.ids\.json$/.test(segment.ids) || segment.encoding !== "gzip") {
+        throw new Error(`vectors meta.json ${kind} segment has an unexpected file name: ${segment.file}`);
+      }
+      const data = await readGzipEntry(vectorsDir, segment);
+      const expectedBytes = segment.count * embeddingRowBytes;
+      if (data.length !== expectedBytes || segment.bytes !== expectedBytes) {
+        throw new Error(`${segment.file} must be count x ${embeddingRowBytes} = ${expectedBytes} bytes, got ${data.length}`);
+      }
+      if (sha256Hex(data) !== segment.sha256) {
+        throw new Error(`${segment.file} sha256 does not match vectors meta.json`);
+      }
+      const idsPath = join(vectorsDir, segment.ids);
+      const photoIds = await assertJson(idsPath);
+      const idsBytes = (await readFile(idsPath)).length;
+      if (!Array.isArray(photoIds) || photoIds.length !== segment.count || idsBytes !== segment.idsBytes) {
+        throw new Error(`${segment.ids} must list ${segment.count} photo_ids and match idsBytes`);
+      }
+      photoIds.forEach((photoId) => withVectors.add(String(photoId)));
+      transferBytes += segment.transferBytes + segment.idsBytes;
+    }
+    if (set.transferBytes !== transferBytes) {
+      throw new Error(`vectors meta.json ${kind} transferBytes does not add up`);
+    }
+    if (indexPhotoIds.filter((photoId) => withVectors.has(photoId)).length !== set.covered) {
+      throw new Error(`vectors meta.json ${kind} covered count does not match photos-index.json`);
+    }
+  }
+  const tokenizer = meta.queryModel?.tokenizer;
+  if (tokenizer) {
+    if (tokenizer.file !== embeddingQueryVocabulary.file || tokenizer.encoding !== "gzip") {
+      throw new Error(`vectors meta.json queryModel.tokenizer must be gzip-encoded ${embeddingQueryVocabulary.file}`);
+    }
+    const data = await readGzipEntry(vectorsDir, tokenizer);
+    if (data.length !== embeddingQueryVocabulary.bytes || sha256Hex(data) !== embeddingQueryVocabulary.sha256 || tokenizer.sha256 !== embeddingQueryVocabulary.sha256) {
+      throw new Error(`${tokenizer.file} does not match the pinned query model tokenizer`);
+    }
+  }
+  await assertFile(join(artifactDir, semanticWorkerFile));
+  await assertJavaScriptImportGraph(artifactDir, semanticWorkerFile);
+}
+
+// Reads a gzip-encoded vectors entry after checking its transfer size.
+async function readGzipEntry(vectorsDir, entry) {
+  const path = join(vectorsDir, entry.file);
+  await assertFile(path);
+  const compressed = await readFile(path);
+  if (compressed.length !== entry.transferBytes) {
+    throw new Error(`${entry.file} transferBytes does not match the file size`);
+  }
+  return gunzipSync(compressed);
+}
+
 async function main() {
   const options = parseArgs(process.argv);
   if (options.help) {
@@ -239,6 +367,11 @@ async function main() {
   }
   if (["./appearance.js", "./assets/brand-logo.svg", "./assets/brand-logo-white.svg"].some((url) => !serviceWorker.includes(JSON.stringify(url)))) {
     throw new Error("service-worker.js must precache appearance and both brand variants");
+  }
+  // Multi-threaded WASM for the query model needs both the page and the
+  // semantic worker script served with these headers.
+  if (!['"Cross-Origin-Embedder-Policy": "credentialless"', '"Cross-Origin-Opener-Policy": "same-origin"', '["document", "worker"]'].every((text) => serviceWorker.includes(text))) {
+    throw new Error("service-worker.js must add cross-origin isolation headers to pages and worker scripts");
   }
   const requiredMetadata = [
     'name="description"',
@@ -294,6 +427,10 @@ async function main() {
   for (const url of buildFinderDataUrls(dataMode)) {
     await assertJson(join(options.artifactDir, artifactPathFromUrl(url)));
   }
+  if (!/finderEmbeddingsMetaUrl: "[^"]*"/.test(config)) {
+    throw new Error("config.js must include finderEmbeddingsMetaUrl (empty when semantic vectors are skipped)");
+  }
+  await assertSemanticVectors(options.artifactDir, extractConfigString(config, "finderEmbeddingsMetaUrl"));
 
   console.log(`GitHub Pages artifact looks valid: ${options.artifactDir}`);
 }

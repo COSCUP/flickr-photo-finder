@@ -4,6 +4,8 @@ export let resultTrackingDelayMs = 600;
 export let discoverWindowSize = 24;
 export let discoverHistorySize = 12;
 export let discoverCandidateLimit = 2000;
+export let semanticTopK = 200;
+export let semanticRrfK = 60;
 
 export let peopleCountFilters = [
   { label: "全部人數", value: "" },
@@ -105,6 +107,8 @@ export function applyTaskModeRegistry(interfaceRegistry) {
   discoverWindowSize = Number(settings.discoverWindowSize || discoverWindowSize);
   discoverHistorySize = Number(settings.discoverHistorySize || discoverHistorySize);
   discoverCandidateLimit = Number(settings.discoverCandidateLimit || discoverCandidateLimit);
+  semanticTopK = Number(settings.semanticTopK || semanticTopK);
+  semanticRrfK = Number(settings.semanticRrfK || semanticRrfK);
   peopleCountFilters = interfaceRegistry?.pages?.peopleCountBuckets ?? peopleCountFilters;
   taskModes = interfaceRegistry?.pages?.taskModes ?? taskModes;
 }

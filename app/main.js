@@ -55,12 +55,25 @@ import { registerPwa } from "./pwa.js";
 import {
   renderActiveFilters,
   renderEmpty,
+  renderResultTabs,
   resultContextText,
+  semanticResultText,
   shouldAutoLoadMore,
   updateLoadMore,
   updateTaskButtons,
 } from "./result-render.js";
-import { applySearchRegistry, filterAndSortPhotos } from "./search-sort.js";
+import { applySearchRegistry, filterAndSortPhotos, matchesFilters } from "./search-sort.js";
+import { createSemanticController } from "./semantic-controller.js";
+import {
+  eligibilityMask,
+  enterSimilarState,
+  exitSimilarState,
+  hasVector,
+  photosForRows,
+  resolveResultView,
+  semanticRanking,
+  similarRanking,
+} from "./semantic-search.js";
 import { applyUrlStateRegistry, decodeUrlState, encodeUrlState, finderStateUrl } from "./url-state.js";
 import {
   applyTaskModeRegistry,
@@ -71,11 +84,21 @@ import {
   peopleCountFilters,
   resultTrackingDelayMs,
   searchDebounceMs,
+  semanticRrfK,
+  semanticTopK,
   taskModes,
 } from "./task-modes.js";
 
 const controls = queryControls();
 const elements = queryElements();
+// Semantic controls stay out of `controls` so generic filter binding skips them.
+Object.assign(elements, {
+  resultBar: document.querySelector(".result-bar"),
+  resultTabs: document.querySelector("#resultTabs"),
+  semanticTab: document.querySelector("#semanticTabButton"),
+  keywordTab: document.querySelector("#keywordTabButton"),
+  previewSimilar: document.querySelector("#previewSimilarButton"),
+});
 bindControlDismissal();
 
 let photos = [];
@@ -98,6 +121,14 @@ let previewSwipeState = null;
 let suppressPreviewImageClick = false;
 let sheetDragState = null;
 let pwaRegistered = false;
+let semantic = null;
+let photoRowById = new Map();
+let semanticMask = null;
+let semanticMemo = { key: "", rows: [] };
+let semanticPendingQuery = "";
+let pendingSimilarPhotoId = "";
+let currentView = { mode: "keyword", showTabs: false };
+const failedSemanticQueries = new Set();
 
 const state = {
   taskMode: "all",
@@ -105,6 +136,9 @@ const state = {
   selectedPhotoIds: new Set(),
   promotedPhotoIds: new Set(),
   lastTrackedZeroState: "",
+  view: "",
+  similarPhotoId: "",
+  similarReturn: null,
 };
 
 let filterControls = {};
@@ -368,6 +402,7 @@ function currentFilterSnapshot() {
     curationStatus: state.filters.curationStatus,
     collection: state.filters.collection,
     ...filterCounts,
+    searchMode: currentView.mode,
     resultCount: currentResults.length,
   };
 }
@@ -447,6 +482,163 @@ function filteredAndSortedPhotos() {
   });
 }
 
+// Semantic views apply every filter except the keyword search text. The mask
+// is built lazily so cached rankings skip the per-photo filter pass.
+function semanticEligibility() {
+  const filters = { ...currentPhotoFilters(), search: "" };
+  return {
+    key: JSON.stringify(filters),
+    mask: () => {
+      semanticMask = eligibilityMask(photos, (photo) => matchesFilters(photo, filters), semanticMask?.length === photos.length ? semanticMask : undefined);
+      return semanticMask;
+    },
+  };
+}
+
+function memoizedRows(key, compute) {
+  if (semanticMemo.key !== key) {
+    semanticMemo = { key, rows: compute() };
+  }
+  return semanticMemo.rows;
+}
+
+function similarSourcePhoto() {
+  const row = photoRowById.get(state.similarPhotoId);
+  return row === undefined ? null : photos[row];
+}
+
+function requestQueryEmbedding(query) {
+  if (semanticPendingQuery === query) {
+    return;
+  }
+  semanticPendingQuery = query;
+  semantic.embed(query).then(
+    () => {
+      if (semanticPendingQuery === query) {
+        semanticPendingQuery = "";
+      }
+      if (controls.search.value.trim() === query) {
+        render({ preservePage: true, source: "search" });
+      }
+    },
+    () => {
+      if (semanticPendingQuery === query) {
+        semanticPendingQuery = "";
+      }
+      failedSemanticQueries.add(query);
+      if (controls.search.value.trim() === query) {
+        render({ preservePage: true, source: "search" });
+      }
+    },
+  );
+}
+
+// Chooses the displayed list: keyword results stay the original behavior;
+// semantic and similarity views are bounded top-N rankings over photos that
+// pass every other filter.
+function displayedResults(keywordResults) {
+  const query = controls.search.value.trim();
+  const view = resolveResultView({
+    textReady: Boolean(semantic?.textReady()) && !failedSemanticQueries.has(query),
+    imageReady: Boolean(semantic?.imageReady()),
+    query,
+    similarPhotoId: state.similarPhotoId,
+    requestedView: state.view,
+  });
+  if (view.mode === "similar") {
+    const sourcePhoto = similarSourcePhoto();
+    const sourceRow = sourcePhoto ? photoRowById.get(sourcePhoto.photo_id) : -1;
+    const image = semantic.sets.image;
+    if (!sourcePhoto || !hasVector(image, sourceRow)) {
+      return { ...view, results: [], sourcePhoto, missingSource: true };
+    }
+    const eligibility = semanticEligibility();
+    const rows = memoizedRows(`similar:${sourceRow}:${eligibility.key}`, () =>
+      similarRanking({ image, sourceRow, eligible: eligibility.mask(), topK: semanticTopK }),
+    );
+    return { ...view, results: photosForRows(photos, rows), sourcePhoto };
+  }
+  if (!view.showTabs) {
+    return { ...view, results: keywordResults };
+  }
+  const vector = semantic.cachedEmbedding(query);
+  if (!vector) {
+    requestQueryEmbedding(query);
+    return { ...view, results: view.mode === "semantic" ? [] : keywordResults, pending: true, semanticCount: 0 };
+  }
+  const eligibility = semanticEligibility();
+  const sets = { text: semantic.sets.text, image: semantic.sets.image };
+  const rows = memoizedRows(`query:${query}:${eligibility.key}`, () =>
+    semanticRanking({ sets, query: vector, eligible: eligibility.mask(), topK: semanticTopK, rrfK: semanticRrfK }),
+  );
+  const semanticResults = photosForRows(photos, rows);
+  return {
+    ...view,
+    results: view.mode === "semantic" ? semanticResults : keywordResults,
+    semanticCount: semanticResults.length,
+  };
+}
+
+function updatePreviewSimilarButton() {
+  elements.previewSimilar.hidden = !semantic?.available || !semantic.hasImageVectors();
+}
+
+function scrollToResults() {
+  elements.resultBar?.scrollIntoView({ block: "start" });
+}
+
+function similarStateSnapshot() {
+  return {
+    search: controls.search.value,
+    view: state.view,
+    similar: state.similarPhotoId,
+    similarReturn: state.similarReturn,
+  };
+}
+
+function applySimilarState(next) {
+  controls.search.value = next.search;
+  state.view = next.view;
+  state.similarPhotoId = next.similar;
+  state.similarReturn = next.similarReturn;
+}
+
+// Entering "similar to" gets its own history entry, so the browser back
+// button returns to the previous query; removing the chip restores it too.
+function applySimilarPhoto(photoId) {
+  pendingSimilarPhotoId = "";
+  closePreview();
+  syncUrlState();
+  window.history.pushState(null, "", window.location.href);
+  applySimilarState(enterSimilarState(similarStateSnapshot(), photoId));
+  render({ resetPage: true, source: "similar" });
+  trackEvent("find_similar_photos", { photo_id: state.similarPhotoId, result_count: currentResults.length });
+  scrollToResults();
+}
+
+function findSimilarToPreview() {
+  if (!activePreviewPhoto || !semantic?.available) {
+    return;
+  }
+  if (semantic.imageReady()) {
+    applySimilarPhoto(activePreviewPhoto.photo_id);
+    return;
+  }
+  pendingSimilarPhotoId = activePreviewPhoto.photo_id;
+  closePreview();
+  semantic.openDialog({ preferImage: true });
+}
+
+function onSemanticChange() {
+  updatePreviewSimilarButton();
+  if (pendingSimilarPhotoId && semantic.imageReady()) {
+    applySimilarPhoto(pendingSimilarPhotoId);
+    return;
+  }
+  semanticMemo = { key: "", rows: [] };
+  render({ preservePage: true, preserveScroll: true });
+}
+
 function renderOverview() {
   renderOverviewPanel({ photos, photoSchema, elements, optionLabels });
 }
@@ -497,6 +689,7 @@ async function openPreview(photo) {
   controls.previewCopyFlickr.title = "複製 Flickr 原始照片頁連結";
   controls.previewCopyFinder.title = "複製 Finder 中這張照片的 deep link";
   updatePreviewCandidateButton();
+  updatePreviewSimilarButton();
   elements.photoPreviewDialog.hidden = false;
   if (!elements.photoPreviewDialog.open) {
     elements.photoPreviewDialog.showModal();
@@ -534,6 +727,8 @@ function currentUrlState() {
     sort: controls.sort.value,
     filters: state.filters,
     selectedPhotoIds: state.selectedPhotoIds,
+    view: state.view,
+    similar: state.similarPhotoId,
   };
 }
 
@@ -542,7 +737,7 @@ function candidateListLink() {
 }
 
 function activeFilterCount() {
-  return activeFilterEntries().filter(([key]) => key !== "task" && key !== "search").length;
+  return displayedFilterEntries().filter(([key]) => key !== "task" && key !== "search").length;
 }
 
 function updateMobileSummary() {
@@ -858,14 +1053,28 @@ function activeFilterEntries() {
   return buildActiveFilterEntries({ state, controls, activeTask: activeTask() });
 }
 
+// Chips also show the removable "similar to" condition. It stays out of
+// activeFilterEntries so AI assistant prompts only describe keyword filters.
+function displayedFilterEntries() {
+  const entries = activeFilterEntries();
+  if (state.similarPhotoId) {
+    const sourcePhoto = similarSourcePhoto();
+    const label = semantic?.imageReady() ? "相似於" : "相似於（需開啟以圖找圖）";
+    entries.push(["similar", label, sourcePhoto ? photoTitle(sourcePhoto) : state.similarPhotoId, state.similarPhotoId]);
+  }
+  return entries;
+}
+
 function updateResetButtonState() {
-  const hasResettableState = activeFilterEntries().length > 0 || controls.sort.value !== "recommended";
+  const hasResettableState = displayedFilterEntries().length > 0 || controls.sort.value !== "recommended";
   controls.reset.classList.toggle("is-active", hasResettableState);
 }
 
 function clearFilter(key, value = "") {
   if (key === "task") {
     state.taskMode = "all";
+  } else if (key === "similar") {
+    applySimilarState(exitSimilarState(similarStateSnapshot()));
   } else if (key === "search") {
     controls.search.value = "";
   } else {
@@ -883,7 +1092,10 @@ function render({ resetPage = false, preservePage = false, preserveScroll = fals
       window.requestAnimationFrame(() => window.scrollTo(scrollX, scrollY));
     }
   };
-  const filtered = filteredAndSortedPhotos();
+  const keywordResults = filteredAndSortedPhotos();
+  const display = displayedResults(keywordResults);
+  const filtered = display.results;
+  currentView = { mode: display.mode, showTabs: display.showTabs };
   currentResults = filtered;
   if (resetPage || (!preservePage && visibleCount <= 0)) {
     visibleCount = pageSize;
@@ -892,8 +1104,16 @@ function render({ resetPage = false, preservePage = false, preserveScroll = fals
   updateTaskButtons({ elements, taskMode: state.taskMode });
   updateTaskModeSummary();
   updateFilterLayout({ controls, elements, taskMode: state.taskMode });
-  renderActiveFilters({ elements, activeFilterEntries });
+  renderActiveFilters({ elements, activeFilterEntries: displayedFilterEntries });
   updateResetButtonState();
+  renderResultTabs({
+    elements,
+    show: display.showTabs,
+    view: display.mode,
+    semanticCount: display.semanticCount ?? 0,
+    keywordCount: keywordResults.length,
+    pending: Boolean(display.pending),
+  });
   renderCandidates({
     selectedPhotoIds: state.selectedPhotoIds,
     photos,
@@ -909,8 +1129,20 @@ function render({ resetPage = false, preservePage = false, preserveScroll = fals
   updateMobileSummary();
   elements.grid.replaceChildren();
   elements.grid.setAttribute("aria-busy", "false");
-  elements.summary.textContent = `${filtered.length} / ${photos.length} 張照片`;
-  elements.context.textContent = resultContextText({ photos, filtered, controls, activeTask, activeFilterEntries });
+  if (display.mode === "keyword") {
+    elements.summary.textContent = `${filtered.length} / ${photos.length} 張照片`;
+    elements.context.textContent = resultContextText({ photos, filtered, controls, activeTask, activeFilterEntries });
+  } else {
+    const text = semanticResultText({
+      mode: display.mode,
+      count: filtered.length,
+      sourceTitle: display.sourcePhoto ? photoTitle(display.sourcePhoto) : state.similarPhotoId,
+      pending: Boolean(display.pending),
+      activeFilterEntries,
+    });
+    elements.summary.textContent = text.summary;
+    elements.context.textContent = text.context;
+  }
 
   if (photos.length === 0) {
     renderEmpty(elements.grid, "目前資料來源沒有照片資料");
@@ -919,8 +1151,22 @@ function render({ resetPage = false, preservePage = false, preserveScroll = fals
     return;
   }
 
+  if (display.pending && display.mode === "semantic") {
+    renderEmpty(elements.grid, "正在計算語意相似度…");
+    updateLoadMore({ elements, visibleCount, filtered });
+    syncUrlState();
+    restoreScroll();
+    return;
+  }
+
   if (filtered.length === 0) {
-    renderEmpty(elements.grid, "沒有命中目前索引的照片");
+    let emptyText = "沒有命中目前索引的照片";
+    if (display.missingSource) {
+      emptyText = "這張照片還沒有圖片向量，暫時無法找相似照片";
+    } else if (display.mode !== "keyword") {
+      emptyText = "符合其他篩選的照片都還沒有向量；可放寬篩選或切換到關鍵字命中";
+    }
+    renderEmpty(elements.grid, emptyText);
     updateLoadMore({ elements, visibleCount, filtered });
     maybeTrackZeroResults();
     syncUrlState();
@@ -959,6 +1205,9 @@ function maybeTrackZeroResults() {
 
 function resetFilters() {
   state.taskMode = "all";
+  state.view = "";
+  state.similarPhotoId = "";
+  state.similarReturn = null;
   controls.search.value = "";
   controls.sort.value = "recommended";
   for (const definition of filterDefinitions) {
@@ -971,7 +1220,9 @@ function resetFilters() {
 function syncUrlState() {
   const url = new URL(window.location.href);
   url.search = encodeUrlState(currentUrlState()).toString();
-  window.history.replaceState(null, "", url);
+  // The remembered pre-similar query rides along in history state so back and
+  // forward keep chip removal able to restore it.
+  window.history.replaceState(state.similarReturn ? { similarReturn: state.similarReturn } : null, "", url);
 }
 
 function applyUrlState() {
@@ -990,6 +1241,9 @@ function applyUrlState() {
     state.selectedPhotoIds.add(photoId);
     state.promotedPhotoIds.add(photoId);
   }
+  state.view = urlState.view;
+  state.similarPhotoId = urlState.similar;
+  state.similarReturn = urlState.similar ? window.history.state?.similarReturn ?? null : null;
   syncControlsFromState();
 }
 
@@ -1053,10 +1307,23 @@ async function loadData() {
     uniqueSorted,
   });
   updateFilterLayout({ controls, elements, taskMode: state.taskMode });
+  photoRowById = new Map(photos.map((photo, row) => [String(photo.photo_id), row]));
+  semantic = createSemanticController({
+    metaUrl: dataSources.finderEmbeddingsMetaUrl ?? "",
+    photoIds: photos.map((photo) => String(photo.photo_id ?? "")),
+    trackEvent,
+    onChange: onSemanticChange,
+  });
+  semantic.dialog?.addEventListener("close", () => {
+    if (pendingSimilarPhotoId && !["downloading", "loading"].includes(semantic.status)) {
+      pendingSimilarPhotoId = "";
+    }
+  });
   applyUrlState();
   renderOverview();
   render({ resetPage: true });
   revealPhotoFromHash();
+  semantic.restore();
 }
 
 function scheduleSearchRender() {
@@ -1099,8 +1366,15 @@ function bindFilterControlEvents() {
         syncStateFromControl(filterDefinition.key);
         render({ resetPage: true, source: "filter" });
       });
+    } else if (key === "search") {
+      control.addEventListener("input", () => {
+        // Typing a new query replaces a "similar to" condition.
+        state.similarPhotoId = "";
+        state.similarReturn = null;
+        scheduleSearchRender();
+      });
     } else {
-      control.addEventListener("input", key === "search" ? scheduleSearchRender : () => render({ resetPage: true, source: "filter" }));
+      control.addEventListener("input", () => render({ resetPage: true, source: "filter" }));
     }
   }
 }
@@ -1256,6 +1530,25 @@ for (const sheet of [elements.searchPanel, elements.sidePanel, elements.photoPre
   sheet.addEventListener("touchend", onSheetTouchEnd);
   sheet.addEventListener("touchcancel", onSheetTouchEnd);
 }
+elements.resultTabs.addEventListener("click", (event) => {
+  const tab = event.target instanceof Element ? event.target.closest("[data-result-view]") : null;
+  if (!tab || tab.dataset.resultView === currentView.mode) {
+    return;
+  }
+  state.view = tab.dataset.resultView;
+  render({ resetPage: true, source: "search" });
+  tab.focus({ preventScroll: true });
+});
+elements.resultTabs.addEventListener("keydown", (event) => {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  const next = currentView.mode === "semantic" ? elements.keywordTab : elements.semanticTab;
+  next.click();
+});
+elements.previewSimilar.addEventListener("click", findSimilarToPreview);
 controls.previewLarge.addEventListener("click", downloadPreviewLargeImage);
 controls.previewCopyFlickr.addEventListener("click", copyPreviewFlickrLink);
 controls.previewCopyFinder.addEventListener("click", copyPreviewFinderLink);
@@ -1281,6 +1574,19 @@ elements.aiAssistantSheetLink.addEventListener("click", () => {
   trackEvent("open_sheets_for_ai_assistant", currentAiAssistantEventParams());
 });
 window.addEventListener("hashchange", revealPhotoFromHash);
+window.addEventListener("popstate", () => {
+  const urlState = decodeUrlState(new URLSearchParams(window.location.search));
+  if (
+    urlState.search === controls.search.value &&
+    urlState.view === state.view &&
+    urlState.similar === state.similarPhotoId
+  ) {
+    return;
+  }
+  const similarReturn = urlState.similar ? window.history.state?.similarReturn ?? null : null;
+  applySimilarState({ search: urlState.search, view: urlState.view, similar: urlState.similar, similarReturn });
+  render({ resetPage: true, source: "search" });
+});
 window.addEventListener("scroll", queueAutoLoadMore, { passive: true });
 window.addEventListener("resize", queueAutoLoadMore);
 window.addEventListener("keydown", (event) => {
