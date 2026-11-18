@@ -187,7 +187,7 @@ pnpm finder:dev -- --data-mode static-sharded
 pnpm finder:dev:export -- --data-mode static-sharded
 ```
 
-這個模式和 `pnpm finder:build` 一樣在建置時讀取資料，artifact 放在 `tmp/pages-dev/<source>-static/`，`data/embeddings` 有 segment 時會一併產生向量；只支援 `sheets` 與 `export`，不支援 `fixture`。Sheets 之後的更新要重新啟動才會反映。
+這個模式和 `pnpm finder:build` 一樣在建置時讀取資料，artifact 放在 `tmp/pages-dev/<source>-static/`，`data/embeddings` 有 segment 時會一併產生向量；只支援 `sheets` 與 `export`，不支援 `fixture`。Sheets 之後的更新要重新啟動才會反映。文字語意搜尋的查詢模型需要安全環境（HTTPS 或 `localhost`）才有的 Cache API 與 WebGPU；用 `http://` 加區網 IP 開啟時，前端隱藏文字語意搜尋並說明原因，以圖找圖仍可使用，但向量不會寫入瀏覽器快取。要讓其他裝置 demo 文字語意搜尋，請透過 HTTPS 提供 dev server。
 
 若要用最近一次正式 Sheets 匯出快照產生 static artifact，可執行：
 

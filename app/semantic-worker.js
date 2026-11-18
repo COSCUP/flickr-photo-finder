@@ -36,7 +36,7 @@ async function fetchTextConfig({ modelId, revision }) {
   const url = `${modelHost}/${modelId}/resolve/${encodeURIComponent(revision)}/config.json`;
   // The URL is revision-pinned, so a cached copy never goes stale; reading
   // it from the cache keeps a restore from waiting on the network.
-  const cache = await caches.open(runtimeCacheName).catch(() => null);
+  const cache = await openRuntimeCache();
   let response = await cache?.match(url);
   if (!response) {
     response = await fetch(url);
@@ -90,13 +90,18 @@ function modelProgressCallback() {
   };
 }
 
-async function cachedRuntime(url) {
-  try {
-    const cache = await caches.open(runtimeCacheName);
-    return (await cache.match(url)) ?? null;
-  } catch {
+// Resolves to null where the Cache API is missing (insecure contexts) or
+// refuses to open, e.g. storage blocked by the browser.
+async function openRuntimeCache() {
+  if (typeof caches === "undefined") {
     return null;
   }
+  return caches.open(runtimeCacheName).catch(() => null);
+}
+
+async function cachedRuntime(url) {
+  const cache = await openRuntimeCache();
+  return (await cache?.match(url).catch(() => null)) ?? null;
 }
 
 // ORT only fetches its WASM binary when the first session is created, i.e.
@@ -178,7 +183,10 @@ function installDebugCapture() {
 async function prepareWasmGraph({ modelId, revision, dtype }) {
   const file = dtype === "fp32" ? "model.onnx" : `model_${dtype}.onnx`;
   const url = `${modelHost}/${modelId}/resolve/${encodeURIComponent(revision)}/onnx/${file}`;
-  const cache = await caches.open(runtimeCacheName);
+  const cache = await openRuntimeCache();
+  if (!cache) {
+    throw new Error("瀏覽器無法使用快取（Cache API），查詢模型無法在 CPU 上執行");
+  }
   let response = await cache.match(url);
   if (!response) {
     response = await fetch(url);

@@ -99,6 +99,15 @@ function hasCacheApi() {
   return typeof caches !== "undefined";
 }
 
+// The query model needs the Cache API (the WASM graph rewrite is handed to
+// transformers.js through it) and WebGPU or crypto.subtle, which browsers only
+// expose to secure contexts. Image similarity works without them, uncached.
+const textUnsupportedMessage = "文字語意搜尋需要以 HTTPS 或 localhost 開啟網頁，目前的連線只能使用以圖找圖。";
+
+function supportsTextSearch() {
+  return globalThis.isSecureContext !== false;
+}
+
 class CancelledError extends Error {
   constructor() {
     super("已取消下載");
@@ -160,6 +169,7 @@ function queryDom() {
 export function createSemanticController({ metaUrl = "", photoIds = [], trackEvent = () => {}, onChange = () => {} } = {}) {
   const dom = queryDom();
   const available = Boolean(metaUrl) && Boolean(dom.bar) && typeof Worker !== "undefined";
+  const textSupported = supportsTextSearch();
   const state = {
     status: "idle",
     mode: "",
@@ -844,7 +854,7 @@ export function createSemanticController({ metaUrl = "", photoIds = [], trackEve
         if (state.mode === "full") {
           return `語意搜尋已開啟（${state.device === "wasm" ? "CPU" : "WebGPU"}）。輸入描述即可查詢，查詢內容只在本機計算。`;
         }
-        return `${state.message ? `${state.message} ` : ""}以圖找圖已開啟：在照片預覽按「找相似照片」。文字語意搜尋尚未下載。`;
+        return `${state.message ? `${state.message} ` : ""}以圖找圖已開啟：在照片預覽按「找相似照片」。${textSupported ? "文字語意搜尋尚未下載。" : textUnsupportedMessage}`;
       case "needs-download":
         return state.message || "語意搜尋的資料已不在瀏覽器中，需要重新下載。";
       case "error":
@@ -879,15 +889,15 @@ export function createSemanticController({ metaUrl = "", photoIds = [], trackEve
     dom.progress.hidden = !busy;
     const fullReady = state.status === "ready" && state.mode === "full";
     const imageOnly = state.status === "ready" && state.mode === "image";
-    dom.enableFull.hidden = fullReady;
+    dom.enableFull.hidden = fullReady || !textSupported;
     dom.enableImage.hidden = fullReady || imageOnly || !hasImageVectors();
     dom.enableFull.textContent = imageOnly ? "下載文字語意搜尋" : "下載並開啟語意搜尋";
     dom.enableFull.classList.toggle("is-primary", !state.preferImage || imageOnly);
-    dom.enableImage.classList.toggle("is-primary", state.preferImage && !imageOnly);
+    dom.enableImage.classList.toggle("is-primary", (state.preferImage || !textSupported) && !imageOnly);
     dom.disable.hidden = state.status !== "ready";
     dom.clear.hidden = !state.hasData;
     dom.manage.hidden = busy || (dom.disable.hidden && dom.clear.hidden);
-    dom.message.textContent = state.message || (state.status === "needs-download" ? statusText() : "");
+    dom.message.textContent = state.message || (state.status === "needs-download" ? statusText() : "") || (textSupported ? "" : textUnsupportedMessage);
     dom.message.hidden = !dom.message.textContent;
   }
 
@@ -918,6 +928,9 @@ export function createSemanticController({ metaUrl = "", photoIds = [], trackEve
   }
 
   function enable(mode) {
+    if (mode === "full" && !textSupported) {
+      return;
+    }
     trackEvent("enable_semantic_search", { semantic_mode: mode });
     activate(mode, { allowNetwork: true });
   }
@@ -925,7 +938,7 @@ export function createSemanticController({ metaUrl = "", photoIds = [], trackEve
   // Automatic restore after reload never downloads.
   async function restore() {
     const preference = readSemanticPreference();
-    if (!available || !preference) {
+    if (!available || !preference || (preference === "full" && !textSupported)) {
       return;
     }
     state.status = "checking";
